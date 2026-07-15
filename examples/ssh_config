@@ -1,0 +1,42 @@
+# Copy the required blocks into ~/.ssh/config and replace placeholders.
+# Never commit the private key itself.
+
+Host primary-dev
+    HostName dev-primary.example.com
+    User devuser
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519_codex_devbox
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+
+Host primary-proxy
+    HostName dev-primary.example.com
+    User devuser
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519_codex_devbox
+    IdentitiesOnly yes
+    RemoteForward 127.0.0.1:17897 127.0.0.1:7897
+    ExitOnForwardFailure yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+
+Host secondary-dev
+    HostName dev-secondary.example.com
+    User devuser
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519_codex_devbox
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+
+Host secondary-proxy
+    HostName dev-secondary.example.com
+    User devuser
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519_codex_devbox
+    IdentitiesOnly yes
+    RemoteForward 127.0.0.1:17897 127.0.0.1:7897
+    ExitOnForwardFailure yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 3

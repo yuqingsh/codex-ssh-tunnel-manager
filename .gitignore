@@ -1,0 +1,27 @@
+# Machine-local configuration
+/config/tunnels.psd1
+/config/*.local.psd1
+
+# Credentials and SSH key material
+*.pem
+*.key
+id_ed25519*
+id_rsa*
+known_hosts*
+authorized_keys*
+
+# Runtime state and logs
+*.log
+/runtime/
+/backups/
+
+# PowerShell and editor artifacts
+*.clixml
+*.tmp
+.vscode/
+.idea/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
