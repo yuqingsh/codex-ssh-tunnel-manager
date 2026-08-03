@@ -1,5 +1,6 @@
 # Machine-local configuration
 /config/tunnels.psd1
+/config/tunnels.macos.conf
 /config/*.local.psd1
 
 # Credentials and SSH key material
@@ -13,6 +14,8 @@ authorized_keys*
 # Runtime state and logs
 *.log
 /runtime/
+/tmp/
+/artifacts/
 /backups/
 
 # PowerShell and editor artifacts

@@ -1,5 +1,7 @@
 # Operations runbook
 
+macOS users should follow the complete [macOS deployment and usage guide](macos-setup.md). The sections below retain the Windows and Linux operational details.
+
 ## Prerequisites
 
 Windows requires:
@@ -11,6 +13,8 @@ Windows requires:
 - key-only login to each development alias.
 
 Linux requires OpenSSH Server, `curl`, `git`, and a compatible Codex CLI installation.
+
+macOS requires the built-in OpenSSH Client, a Clash HTTP/mixed port, user-level launchd support, and the macOS SSH aliases described in [macOS deployment and usage guide](macos-setup.md).
 
 ## Configure Windows
 

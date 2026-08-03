@@ -1,23 +1,23 @@
 # Codex SSH Tunnel Manager
 
-一套面向 Windows Codex App 与 Linux 开发机的按需 SSH 反向隧道管理方案。Windows 上的 Codex 远程 SSH 会话出现时，仅启动对应 Linux 主机的代理隧道；会话持续消失一段时间后自动停止。
+一套面向 Windows/macOS Codex App 与 Linux 开发机的按需 SSH 反向隧道管理方案。Codex 远程 SSH 会话出现时，仅启动对应 Linux 主机的代理隧道；会话持续消失一段时间后自动停止。
 
 ## 核心行为
 
-- Windows 登录后只启动轻量控制器。
+- Windows 登录或 macOS 用户登录后只启动轻量控制器。
 - 控制器按精确 SSH 别名识别 `codex app-server proxy` 会话。
 - 检测到远程会话后，在一个轮询周期内启动对应反向隧道。
 - 会话连续消失 10 分钟后停止对应隧道，短暂重连不会造成抖动。
-- 隧道任务没有自动触发器，无法在未检测到 Codex 远程会话时自行启动。
-- 控制器和隧道任务在后台运行，不显示空白 PowerShell 窗口。
+- 隧道任务没有自动启动触发器，无法在未检测到 Codex 远程会话时自行启动。
+- 控制器和隧道任务在后台运行，不显示控制台窗口。
 - Clash 未监听、SSH 失败或反向端口冲突时记录日志并重试。
 
 默认示例管理以下映射：
 
-| Codex 开发别名 | 隧道别名 | Windows 任务 | Linux 入口 |
+| Codex 开发别名 | 隧道别名 | Windows 任务 / macOS label | Linux 入口 |
 | --- | --- | --- | --- |
-| `primary-dev` | `primary-proxy` | `Codex SSH Tunnel Primary` | `127.0.0.1:17897` |
-| `secondary-dev` | `secondary-proxy` | `Codex SSH Tunnel Secondary` | `127.0.0.1:17897` |
+| `primary-dev` | `primary-proxy` | `Codex SSH Tunnel Primary` / `com.codex.ssh-tunnel-manager.tunnel.primary` | `127.0.0.1:17897` |
+| `secondary-dev` | `secondary-proxy` | `Codex SSH Tunnel Secondary` / `com.codex.ssh-tunnel-manager.tunnel.secondary` | `127.0.0.1:17897` |
 
 ## 数据路径
 
@@ -25,7 +25,7 @@
 Linux Codex
   -> HTTP_PROXY=http://127.0.0.1:17897
   -> SSH RemoteForward
-  -> Windows 127.0.0.1:7897
+  -> Windows/macOS 127.0.0.1:7897
   -> Clash
   -> OpenAI services
 ```
@@ -39,13 +39,16 @@ config/                 可提交的配置模板；实际配置默认忽略
 docs/                   架构、运行与故障处理文档
 examples/               SSH 配置示例
 scripts/windows/        Windows 安装、运行、状态和卸载脚本
+scripts/macos/          macOS 初始化、launchd、安装、运行、状态和卸载脚本
 scripts/linux/          Linux Codex wrapper 与验收脚本
-tests/                  不修改系统状态的静态检查
+tests/                  不修改系统状态的静态检查和语法检查
 ```
 
 ## 快速开始
 
-前提：Windows PowerShell 5.1、OpenSSH Client、Clash mixed port，以及已经验证过主机指纹的 SSH 配置。
+前提：对应平台的 OpenSSH Client、Clash HTTP/mixed port，以及已经验证过主机指纹的 SSH 配置。
+
+### Windows
 
 ```powershell
 Copy-Item .\config\tunnels.example.psd1 .\config\tunnels.psd1
@@ -69,6 +72,46 @@ Linux 端安装 wrapper 前请先阅读 [运行手册](docs/operations.md)。安
 
 在 Windows 设备上部署时，按 [Windows 部署指南](docs/windows-setup.md) 操作。
 
+### macOS
+
+推荐使用交互式初始化向导完成一次性配置：
+
+```bash
+./scripts/macos/setup-codex-ssh-tunnel-manager.sh
+```
+
+向导会探测本机 Clash 端口，生成 `config/tunnels.macos.conf`，可选写入受本项目管理的 SSH alias，检查 `RemoteForward`，并安装 launchd 控制器。真实主机名、用户名和密钥路径只会写入本机配置与 `~/.ssh`，不会写入 Git 跟踪文件。远端 Linux wrapper 只做只读检查，不会被向导自动修改。
+
+如果 SSH alias 已经存在，可复用已有配置：
+
+```bash
+./scripts/macos/setup-codex-ssh-tunnel-manager.sh --ssh-mode existing
+```
+
+只生成和校验本机配置、不加载 launchd：
+
+```bash
+./scripts/macos/setup-codex-ssh-tunnel-manager.sh --no-install
+```
+
+也可以继续使用底层安装器，适用于已经准备好配置文件的场景：
+
+复制并编辑 macOS 本机配置：
+
+```bash
+cp config/tunnels.macos.example.conf config/tunnels.macos.conf
+chmod 600 config/tunnels.macos.conf
+```
+
+在确认 SSH alias、Clash 端口和 Linux wrapper 后安装用户级 launchd 控制器：
+
+```bash
+./scripts/macos/install-codex-ssh-tunnel-manager.sh \
+  --config config/tunnels.macos.conf
+```
+
+详细步骤、状态查询、日志位置和卸载方法见 [macOS 部署与使用指南](docs/macos-setup.md)。
+
 ## 验证
 
 静态检查不修改计划任务或远端机器：
@@ -78,12 +121,30 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-StaticChe
 git diff --check
 ```
 
+macOS 静态检查：
+
+```bash
+tests/Invoke-MacOSStaticChecks.sh
+```
+
+Linux 脚本语法检查：
+
+```bash
+bash -n scripts/linux/*.sh
+```
+
 ## 日志
 
 默认日志目录：
 
 ```text
 %LOCALAPPDATA%\Codex\ssh-tunnels
+```
+
+macOS 日志目录：
+
+```text
+~/Library/Logs/Codex/ssh-tunnels
 ```
 
 运行日志、实际配置、密钥和主机指纹文件均不应提交到 Git。

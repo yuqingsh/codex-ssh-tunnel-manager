@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Added
+
+- Add a macOS user-level launchd controller and triggerless on-demand tunnel jobs.
+- Add macOS configuration, installation, status, inspection, uninstallation, and static-check scripts.
+- Add an interactive macOS setup wizard that detects Clash ports, generates machine-local configuration, optionally manages a dedicated SSH include, and invokes the launchd installer.
+- Add macOS deployment and usage documentation while preserving the Windows and Linux implementations.
+
 ## [0.2.0] - 2026-07-15
 
 ### Changed

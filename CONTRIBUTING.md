@@ -19,6 +19,14 @@ For Linux script changes, also run:
 bash -n scripts/linux/*.sh
 ```
 
+For macOS script changes, also run:
+
+```bash
+tests/Invoke-MacOSStaticChecks.sh
+```
+
+macOS integration checks may inspect local SSH, Clash, launchd, and Linux transport state only when explicitly requested. Static checks must not load launchd jobs, edit SSH configuration, or modify remote Linux files.
+
 ## Commit messages
 
 Use a short imperative subject. Conventional Commit prefixes are preferred:
