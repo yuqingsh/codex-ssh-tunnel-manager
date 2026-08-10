@@ -11,6 +11,10 @@ All notable changes to this project are documented in this file. The format foll
 - Add an interactive macOS setup wizard that detects Clash ports, generates machine-local configuration, optionally manages a dedicated SSH include, and invokes the launchd installer.
 - Add macOS deployment and usage documentation while preserving the Windows and Linux implementations.
 
+### Fixed
+
+- Fix macOS controller state writes so the tunnel name and all state fields are passed consistently under POSIX shell `set -u`.
+
 ## [0.2.0] - 2026-07-15
 
 ### Changed

@@ -173,7 +173,7 @@ start_tunnel() {
 
     start_existing_pid=$(codex_find_tunnel_pid "$start_label" "$start_alias" "$runner_path")
     if [ -n "$start_existing_pid" ]; then
-        state_write "$start_now" 0 0
+        state_write "$start_name" "$start_now" 0 0
         return 0
     fi
 
@@ -181,7 +181,7 @@ start_tunnel() {
         start_failures=$((state_failures + 1))
         start_delay=$(retry_delay "$start_failures")
         start_retry_at=$((start_now + start_delay))
-        state_write "$start_now" "$start_failures" "$start_retry_at"
+        state_write "$start_name" "$start_now" "$start_failures" "$start_retry_at"
         log_controller "Clash 不可用：$local_proxy_host:$local_proxy_port；$start_delay 秒后重试 $start_name"
         return 0
     fi
@@ -191,12 +191,12 @@ start_tunnel() {
         start_failures=$((state_failures + 1))
         start_delay=$(retry_delay "$start_failures")
         start_retry_at=$((start_now + start_delay))
-        state_write "$start_now" "$start_failures" "$start_retry_at"
+        state_write "$start_name" "$start_now" "$start_failures" "$start_retry_at"
         log_controller "无法按需启动 launchd 隧道任务：$start_label；$start_delay 秒后重试"
         return 0
     fi
 
-    state_write "$start_now" 0 "$((start_now + poll_seconds))"
+    state_write "$start_name" "$start_now" 0 "$((start_now + poll_seconds))"
     log_controller "检测到 Codex 远程会话，已请求启动隧道：$start_name ($start_alias)"
 }
 
@@ -212,17 +212,17 @@ run_cycle() {
 
         if [ -n "$cycle_session_pids" ]; then
             if [ -z "$cycle_tunnel_pid" ]; then
-                state_write "$cycle_now" "$state_failures" "$state_retry_at"
+                state_write "$cycle_name" "$cycle_now" "$state_failures" "$state_retry_at"
                 start_tunnel "$cycle_name" "$cycle_proxy_alias" "$cycle_label" "$cycle_now"
             else
-                state_write "$cycle_now" 0 0
+                state_write "$cycle_name" "$cycle_now" 0 0
             fi
             continue
         fi
 
         if [ -n "$cycle_tunnel_pid" ]; then
             if [ "$state_last_seen" -eq 0 ]; then
-                state_write "$cycle_now" 0 0
+                state_write "$cycle_name" "$cycle_now" 0 0
                 log_controller "未检测到 $cycle_dev_alias 的 Codex 会话，开始 ${stop_grace_minutes} 分钟停止宽限期"
             elif [ "$((cycle_now - state_last_seen))" -ge "$stop_grace_seconds" ]; then
                 log_controller "$cycle_dev_alias 已连续 ${stop_grace_minutes} 分钟没有 Codex 会话，停止隧道"

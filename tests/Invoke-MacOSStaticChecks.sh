@@ -8,6 +8,7 @@ example_config="$repository_root/config/tunnels.macos.example.conf"
 install_script="$repository_root/scripts/macos/install-codex-ssh-tunnel-manager.sh"
 uninstall_script="$repository_root/scripts/macos/uninstall-codex-ssh-tunnel-manager.sh"
 setup_script="$repository_root/scripts/macos/setup-codex-ssh-tunnel-manager.sh"
+controller_script="$repository_root/scripts/macos/codex-ssh-tunnel-controller.sh"
 failures=0
 temp_root=$(printenv TMPDIR 2>/dev/null || true)
 if [ -z "$temp_root" ]; then
@@ -116,6 +117,12 @@ assert_file_contains "$setup_script" 'trap' '初始化向导未清理临时目�
 assert_file_contains "$setup_script" 'RemoteForward 127.0.0.1:' '初始化向导未生成 loopback RemoteForward'
 assert_file_contains "$setup_script" 'codex_config_validate' '初始化向导未校验生成的配置'
 assert_file_contains "$setup_script" 'gsub(/\]:/, ":", remote)' '初始化向导未兼容 ssh -G 的括号化回环地址'
+assert_file_contains "$controller_script" 'state_write "$start_name" "$start_now" 0 0' 'controller 未按隧道名称写入已存在隧道状态'
+assert_file_contains "$controller_script" 'state_write "$start_name" "$start_now" "$start_failures" "$start_retry_at"' 'controller 未按隧道名称写入启动失败状态'
+assert_file_contains "$controller_script" 'state_write "$cycle_name" "$cycle_now" "$state_failures" "$state_retry_at"' 'controller 未按隧道名称写入会话状态'
+if grep -E 'state_write "\$(start_now|cycle_now)"' "$controller_script" >/dev/null 2>&1; then
+    fail 'controller 存在缺少隧道名称参数的 state_write 调用'
+fi
 if ! "$setup_script" --help >/dev/null 2>&1; then
     fail '初始化向导帮助命令失败'
 fi
