@@ -408,6 +408,8 @@ Cursor 与 Codex 使用配置中同一个开发 alias，例如 `primary-dev`。�
 
 已检查的 Anysphere Remote SSH 1.1.16 会将上述配置导出为大小写 HTTP/HTTPS/NO_PROXY 环境变量，并用于启动远端服务。该适配不需要修改 Linux 的登录脚本或现有 Codex wrapper。只配置终端环境变量不能覆盖已经启动的扩展和 Agent。
 
+### 配置远端服务及扩展的代理
+
 首次配置后：
 
 1. 保存工作，结束需要保留的 Cursor 远端任务。
@@ -416,6 +418,36 @@ Cursor 与 Codex 使用配置中同一个开发 alias，例如 `primary-dev`。�
 4. 在新的远端终端检查 `printf '%s\n' "$HTTPS_PROXY"`，应为 `http://127.0.0.1:17897`；再运行 `curl --max-time 15 https://api2.cursor.sh` 验证继承的代理。需要时检查远端进程的代理环境。
 5. 在 Mac 运行状态脚本，确认 `ActiveCursorSessions` 至少为 1。Cursor 独立连接时也应保持隧道运行。
 
-普通 Reload Window 或仅关闭窗口可能复用旧服务器，不能保证已有进程获得新环境。每日使用只需保持 Mac 在线、Clash 可用，再正常连接 Cursor；不必同时打开 Codex。两种客户端都断开约 10 分钟后隧道自动停止。Mac 休眠或代理关闭期间，远端代理不可用。
+普通 Reload Window 或仅关闭窗口可能复用旧服务器，不能保证已有进程获得新环境。以上只验证环境变量和普通 HTTP 请求；原生 Agent 还需要下面的配置和实际聊天验收。
 
-回退时先恢复备份的 Cursor 设置，再重启对应远端服务。恢复旧控制器脚本后，只重启控制器即可恢复原来的 Codex 专用检测；不必终止正在使用的隧道。
+### 配置 Cursor 原生 Agent 的模型请求
+
+已在 Cursor 3.21.16 中确认：原生 Agent 的远端 HTTP/2 连接可能绕过 HTTP/HTTPS 代理变量。此时 Codex 扩展能聊天、`curl` 返回 200，原生 GPT 仍可能报告 `Model not available`。应检查完整错误和实际连接，不能据此直接判断为额度或模型名称问题。
+
+连接目标远端窗口，执行 `Preferences: Open Remote Settings (JSON)`，在现有设置中合并：
+
+```json
+{
+  "cursorAgentHost.remoteInferenceRoute": "always"
+}
+```
+
+标准 Linux 安装通常将该设置存放在 `~/.cursor-server/data/Machine/settings.json`。保留其他设置；优先放在目标远端的设置中，以免改变其他主机的行为。
+
+该选项来自 Cursor 内置 Agent Host 扩展：`auto` 会探测远端连接后选择路由，`always` 将模型请求经本地 Cursor 客户端发出，`never` 保留远端出网。文件访问和工具执行仍在 Linux；支持代理环境变量的扩展和命令继续使用反向隧道。它只在 Agent Host 启动时读取，保存工作后执行一次 `Developer: Reload Window` 即可生效。这里重载的是推理路由；前一节修改服务器环境变量时仍需重启远端服务。
+
+Mac 的 Clash 也必须覆盖 Cursor 的服务域名，并使用可用的代理出口。可在持久前置规则中将 `cursor.sh`、`cursor.com`、`cursorapi.com`、`cursor-cdn.com` 分配给已有的 AI 代理组。不要直接编辑生成的运行时配置，也不要把 Linux 的回环代理端口填给 Mac。更多域名及网络要求见 [Cursor 网络配置](https://cursor.com/docs/enterprise/network-configuration)。
+
+该设置已在 Cursor 3.21.16 验证；其他版本先确认内置设置是否存在。Cursor 会在 private-inference 远端忽略 `always`，因为本地转发不经过其私有推理路径；此类部署应沿用自身的网络配置。
+
+验收需同时满足：
+
+1. 原生聊天选择目标模型，发送简短测试，实际收到回复。Codex 扩展的回复不能替代此项。
+2. 远端 `Cursor Agent Host` 日志显示 `route=always`、`routing inference via local client` 和 `network kind: external`。通常位于 `~/.cursor-server/data/logs/<session>/exthost*/anysphere.cursor-agent-host/`。
+3. Mac 代理连接记录中能看到原生模型服务域名（例如 `agentn.global.api5.cursor.sh`）走预期代理。必要时按进程核查远端连接，避免把 Mac 本地的 API 健康检查误当作远端 Agent 的模型请求。
+
+如果实际请求仍返回地区限制，保留完整错误和请求 ID，继续排查出口与模型可用性；不要反复重启或关闭 TLS 验证。参见 [Cursor 地区说明](https://cursor.com/docs/account/regions)。
+
+每日使用只需保持 Mac 在线、Clash 可用，再正常连接 Cursor；不必同时打开 Codex。两种客户端都断开约 10 分钟后隧道自动停止。Mac 休眠或代理关闭期间，远端代理不可用。
+
+回退原生推理路由时，只恢复或删除本次添加的 `cursorAgentHost.remoteInferenceRoute` 键，再重载窗口，保留其他远端设置。回退代理环境时先恢复备份的 Cursor 用户设置，再重启对应远端服务。恢复旧控制器脚本后，只重启控制器即可恢复原来的 Codex 专用检测；不必终止正在使用的隧道。

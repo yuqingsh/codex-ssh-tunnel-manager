@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- Document Cursor native Agent's separate inference route: proxy environment variables alone do not cover its remote HTTP/2 transport. Configure the built-in local-client hop per remote, and require an actual chat response plus route verification when validating the setup.
 - Fix macOS controller state writes so the tunnel name and all state fields are passed consistently under POSIX shell `set -u`.
 
 ## [0.2.0] - 2026-07-15

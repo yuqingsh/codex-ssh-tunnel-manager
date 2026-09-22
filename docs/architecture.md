@@ -25,6 +25,14 @@ On macOS, Cursor demand additionally accepts the Remote SSH install/keepalive co
 
 Either client keeps the existing tunnel alive; the grace period starts only when neither is present. Status reports separate Codex and Cursor counts. Cursor Remote SSH proxy settings inject the remote loopback proxy into newly started servers. Existing servers require a restart; applications that ignore proxy variables still need their own configuration.
 
+### Cursor native inference
+
+Cursor 3.21.16 has a separate native AgentService transport. Its remote HTTP/2 connection was observed connecting directly even with `HTTP_PROXY` and `HTTPS_PROXY` set. The default `cursorAgentHost.remoteInferenceRoute: "auto"` can retain that remote route when its connectivity probe succeeds; connectivity does not establish model availability.
+
+Set `cursorAgentHost.remoteInferenceRoute` to `"always"` in the target remote's machine settings and reload its window. This built-in option routes AgentService through the local Cursor client while file access and tool execution stay on the remote. Mac proxy routing must cover Cursor's service domains. Extensions and tools that honor proxy variables continue using the SSH reverse tunnel. No vendor bundle patches or TLS-verification changes are needed.
+
+This setting is verified in Cursor 3.21.16 and is ignored for private-inference remotes because the local hop bypasses their private inference path. Verify support and constraints in the installed version before applying it elsewhere. Acceptance requires an actual native-model reply and the Agent Host log reporting `route=always`, `routing inference via local client`, and `network kind: external`; a proxy variable or HTTP health check alone is insufficient.
+
 ## State model
 
 | Current state | Signal | Action | Next state |

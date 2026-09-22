@@ -113,7 +113,7 @@ chmod 600 config/tunnels.macos.conf
 
 详细步骤、状态查询、日志位置和卸载方法见 [macOS 部署与使用指南](docs/macos-setup.md)。
 
-Cursor 用户还需按该指南配置远端代理并重新启动 Cursor Server。隧道存在本身不会使 Cursor 自动使用代理。Windows 的 Cursor 会话识别暂不包含在本次适配中。
+Cursor 用户还需按该指南配置远端代理并重新启动 Cursor Server。Cursor 原生 Agent 另需配置 `cursorAgentHost.remoteInferenceRoute: "always"`，让模型请求通过 Mac 客户端出网；仅检查代理变量或 `curl` 成功不能验证原生聊天。详见指南中的原生 Agent 配置和实际聊天验收。Windows 的 Cursor 会话识别暂不包含在本次适配中。
 
 ## 验证
 
