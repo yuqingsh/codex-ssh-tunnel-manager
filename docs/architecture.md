@@ -5,7 +5,7 @@
 | Component | Platform | Responsibility |
 | --- | --- | --- |
 | Controller | Windows | Detect remote Codex SSH sessions and start or stop the corresponding tunnel task. |
-| Controller | macOS | Detect remote Codex SSH sessions and demand-start or stop the corresponding launchd tunnel job. |
+| Controller | macOS | Detect remote Codex or Cursor SSH sessions and demand-start or stop the shared launchd tunnel job. |
 | Hidden task launcher | Windows | Start PowerShell through the GUI-subsystem Windows Script Host without creating a visible console window. |
 | Tunnel launcher | Windows | Wait for the local proxy, then maintain one SSH reverse tunnel. |
 | Scheduled tasks | Windows | Keep the controller recoverable and tunnel processes isolated by host. |
@@ -17,9 +17,13 @@
 
 ## Demand signal
 
-The controller inspects only `ssh.exe` processes. A tunnel is considered in use when the command line contains an exact configured development alias followed later by `codex app-server proxy`.
+The controller inspects only `ssh.exe` (Windows) or `ssh` (macOS) processes. Codex demand requires an exact configured development alias followed later by `codex app-server proxy`.
 
 For example, `primary-dev` does not match `primary-dev-extra`, because the regular expression requires an alias boundary. Local Codex usage and unrelated SSH sessions do not start a tunnel.
+
+On macOS, Cursor demand additionally accepts the Remote SSH install/keepalive command: SSH options include `-T` and `-D` or `-L`, the parsed destination equals the configured development alias, and the remote command is `bash --login -c bash` (also accepting `/bin/bash`). The SSH process must have a Cursor app executable in its ancestor chain. Host-like tokens in option values or remote commands are not destinations. Unknown shapes fail closed and can be investigated with the inspection script. Ancestry traversal is bounded and tolerates exited parents and cycles.
+
+Either client keeps the existing tunnel alive; the grace period starts only when neither is present. Status reports separate Codex and Cursor counts. Cursor Remote SSH proxy settings inject the remote loopback proxy into newly started servers. Existing servers require a restart; applications that ignore proxy variables still need their own configuration.
 
 ## State model
 
@@ -47,7 +51,7 @@ The grace timer is in memory. If the controller restarts while a tunnel is runni
 - The controller is a user-level LaunchAgent under `~/Library/LaunchAgents`.
 - The controller uses `RunAtLoad=true` and `KeepAlive=true` so it recovers after login or an unexpected exit.
 - Each tunnel has its own LaunchAgent label, but tunnel jobs use `RunAtLoad=false` and `KeepAlive=false`.
-- The controller starts a tunnel only through `launchctl kickstart` after detecting the matching Codex session.
+- The controller starts a tunnel only through `launchctl kickstart` after detecting a matching Codex or Cursor session.
 - A live tunnel is identified by the exact configured proxy alias and its verified PID.
 - Before termination, the executable name, PID, and exact configured alias are checked together.
 - launchd output and controller logs are written to user-level macOS log directories, not the repository.

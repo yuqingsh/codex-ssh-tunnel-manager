@@ -1,6 +1,6 @@
 # macOS 部署与使用指南
 
-本文用于在 macOS Codex App 与 Linux 开发机之间部署按需 SSH 反向隧道。
+本文用于在 macOS Codex App / Cursor Remote SSH 与 Linux 开发机之间部署按需 SSH 反向隧道。
 
 完成一次初始化后，日常使用不需要在 macOS 上手动选择设备或手动启动隧道：
 
@@ -382,10 +382,40 @@ ps -axo pid=,comm=,args= | grep '[s]sh'
 macOS 部署完成后应满足：
 
 - 登录 macOS 后 controller 自动恢复；
-- 无 Codex 远程会话时隧道保持停止；
+- 无 Codex 或 Cursor 远程会话时隧道保持停止；
 - 打开对应远程项目后隧道自动建立；
 - Linux 端能通过 127.0.0.1:17897 经 Clash 出网；
 - Clash 暂停后会记录并重试；
 - SSH 断开后不会产生重复隧道；
 - 远程会话关闭后经过宽限时间停止；
 - Windows 原有实现和静态检查不受影响。
+
+## Cursor Remote SSH 适配
+
+Cursor 与 Codex 使用配置中同一个开发 alias，例如 `primary-dev`。控制器检查 SSH 的准确目标、`-T`、`-D`/`-L`、`bash --login -c bash` 登录命令，以及来自 Cursor 应用的父进程链。普通终端的相似命令、其他主机和代理 alias 不触发 Cursor 需求。当前适配针对 macOS 正式版 `Cursor.app` 和 Anysphere Remote SSH；其他启动方式需要单独验证。
+
+在 **Mac 的 Cursor 用户设置 JSON** 中合并以下设置（保留已有其他设置和其他主机条目）：
+
+```json
+{
+  "remote.SSH.httpProxy": { "primary-dev": "http://127.0.0.1:17897" },
+  "remote.SSH.httpsProxy": { "primary-dev": "http://127.0.0.1:17897" },
+  "remote.SSH.noProxy": { "primary-dev": "127.0.0.1,localhost,::1" }
+}
+```
+
+这些地址是 **Linux 端** 的代理地址。不要把 Linux 的 `17897` 直接当作 Mac 本地 `http.proxy`；Mac 本地代理端口仍由 Clash 决定。若已有字符串形式的全主机代理设置，先保留备份，再按仍需使用它的主机转换为映射，不要丢弃原来的用途。
+
+已检查的 Anysphere Remote SSH 1.1.16 会将上述配置导出为大小写 HTTP/HTTPS/NO_PROXY 环境变量，并用于启动远端服务。该适配不需要修改 Linux 的登录脚本或现有 Codex wrapper。只配置终端环境变量不能覆盖已经启动的扩展和 Agent。
+
+首次配置后：
+
+1. 保存工作，结束需要保留的 Cursor 远端任务。
+2. 在对应远端窗口的命令面板执行 `Remote-SSH: Kill Remote Server and Reload Window`。
+3. 重新连接 **同一个 alias**，打开原来的项目；控制器通常在 5 秒内建立隧道。
+4. 在新的远端终端检查 `printf '%s\n' "$HTTPS_PROXY"`，应为 `http://127.0.0.1:17897`；再运行 `curl --max-time 15 https://api2.cursor.sh` 验证继承的代理。需要时检查远端进程的代理环境。
+5. 在 Mac 运行状态脚本，确认 `ActiveCursorSessions` 至少为 1。Cursor 独立连接时也应保持隧道运行。
+
+普通 Reload Window 或仅关闭窗口可能复用旧服务器，不能保证已有进程获得新环境。每日使用只需保持 Mac 在线、Clash 可用，再正常连接 Cursor；不必同时打开 Codex。两种客户端都断开约 10 分钟后隧道自动停止。Mac 休眠或代理关闭期间，远端代理不可用。
+
+回退时先恢复备份的 Cursor 设置，再重启对应远端服务。恢复旧控制器脚本后，只重启控制器即可恢复原来的 Codex 专用检测；不必终止正在使用的隧道。

@@ -40,11 +40,17 @@ for pid in $(codex_ssh_pids); do
     matches=
     for tunnel_name in $(codex_config_tunnel_names "$config_path"); do
         dev_alias=$(codex_tunnel_config_get "$config_path" "$tunnel_name" DEV_ALIAS)
-        if codex_command_has_session_signature "$dev_alias" "$command_line"; then
+        client=
+        if codex_pid_matches_session "$pid" "$dev_alias"; then
+            client=codex
+        elif codex_pid_matches_cursor_session "$pid" "$dev_alias"; then
+            client=cursor
+        fi
+        if [ -n "$client" ]; then
             if [ -n "$matches" ]; then
-                matches="$matches,$tunnel_name"
+                matches="$matches,$tunnel_name:$client"
             else
-                matches=$tunnel_name
+                matches="$tunnel_name:$client"
             fi
         fi
     done

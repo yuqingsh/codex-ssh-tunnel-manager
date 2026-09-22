@@ -1,14 +1,15 @@
 # Codex SSH Tunnel Manager
 
-一套面向 Windows/macOS Codex App 与 Linux 开发机的按需 SSH 反向隧道管理方案。Codex 远程 SSH 会话出现时，仅启动对应 Linux 主机的代理隧道；会话持续消失一段时间后自动停止。
+一套面向 Windows/macOS Codex App 与 Linux 开发机的按需 SSH 反向隧道管理方案。macOS 同时支持 Cursor Remote SSH。对应远程会话出现时启动代理隧道；会话持续消失一段时间后自动停止。
 
 ## 核心行为
 
 - Windows 登录或 macOS 用户登录后只启动轻量控制器。
 - 控制器按精确 SSH 别名识别 `codex app-server proxy` 会话。
+- macOS 还识别具有精确目标 alias、转发参数及 Cursor 应用父进程的 Remote SSH 会话；Codex 和 Cursor 共用一条隧道。
 - 检测到远程会话后，在一个轮询周期内启动对应反向隧道。
 - 会话连续消失 10 分钟后停止对应隧道，短暂重连不会造成抖动。
-- 隧道任务没有自动启动触发器，无法在未检测到 Codex 远程会话时自行启动。
+- 隧道任务没有自动启动触发器，只在检测到受支持的远程会话后启动。
 - 控制器和隧道任务在后台运行，不显示控制台窗口。
 - Clash 未监听、SSH 失败或反向端口冲突时记录日志并重试。
 
@@ -111,6 +112,8 @@ chmod 600 config/tunnels.macos.conf
 ```
 
 详细步骤、状态查询、日志位置和卸载方法见 [macOS 部署与使用指南](docs/macos-setup.md)。
+
+Cursor 用户还需按该指南配置远端代理并重新启动 Cursor Server。隧道存在本身不会使 Cursor 自动使用代理。Windows 的 Cursor 会话识别暂不包含在本次适配中。
 
 ## 验证
 

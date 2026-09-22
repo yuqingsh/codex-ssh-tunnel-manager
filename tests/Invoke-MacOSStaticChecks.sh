@@ -149,6 +149,10 @@ else
     fi
 fi
 
+if ! sh "$repository_root/tests/test-cursor-sessions.sh"; then
+    fail 'Cursor 会话识别或控制器生命周期测试失败'
+fi
+
 if [ "$failures" -gt 0 ]; then
     printf 'macOS 静态检查失败：%s 项。\n' "$failures" >&2
     exit 1

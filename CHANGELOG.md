@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- Add macOS Cursor Remote SSH demand detection with exact SSH destination parsing and Cursor process ancestry checks, sharing the existing Codex tunnel and idle grace period.
+- Report separate Cursor session counts, document per-host Cursor proxy settings and server restart, and test matching exclusions plus the controller lifecycle without changing system state.
 - Add a macOS user-level launchd controller and triggerless on-demand tunnel jobs.
 - Add macOS configuration, installation, status, inspection, uninstallation, and static-check scripts.
 - Add an interactive macOS setup wizard that detects Clash ports, generates machine-local configuration, optionally manages a dedicated SSH include, and invokes the launchd installer.

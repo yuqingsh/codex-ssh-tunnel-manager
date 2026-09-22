@@ -269,6 +269,10 @@ codex_launchd_target() {
     printf '%s/%s\n' "$(codex_launchd_domain)" "$1"
 }
 
+codex_launchd_kickstart() {
+    /bin/launchctl kickstart "$(codex_launchd_target "$1")"
+}
+
 codex_tunnel_label() {
     codex_tunnel_label_prefix=$1
     codex_tunnel_label_name=$2
@@ -367,6 +371,92 @@ codex_pid_matches_session() {
     codex_command_has_session_signature "$codex_session_alias" "$(codex_pid_command "$codex_session_pid")"
 }
 
+# Cursor Remote SSH keeps its install/keepalive SSH process alive. Match the
+# actual destination (not a token in -o/remote-command), forwarding flags, and
+# login command. A matching command must also descend from the Cursor app.
+codex_command_has_cursor_signature() {
+    printf '%s\n' "$2" | awk -v wanted="$1" '
+        {
+            # Tokenize quoted option values without evaluating shell text.
+            n = 0; word = ""; quote = ""; escaped = 0; started = 0
+            for (i = 1; i <= length($0); i++) {
+                c = substr($0, i, 1)
+                if (escaped) { word = word c; escaped = 0; continue }
+                if (c == "\\" && quote != sprintf("%c", 39)) { escaped = 1; started = 1; continue }
+                if (quote != "") {
+                    if (c == quote) quote = ""
+                    else word = word c
+                    continue
+                }
+                if (c == "\"" || c == sprintf("%c", 39)) { quote = c; started = 1; continue }
+                if (c ~ /[[:space:]]/) {
+                    if (started) { a[++n] = word; word = ""; started = 0 }
+                } else { word = word c; started = 1 }
+            }
+            if (quote != "" || escaped) exit 1
+            if (started) a[++n] = word
+            if (a[1] !~ /(^|\/)ssh$/) exit 1
+            i = 2; forwarding = 0; no_tty = 0
+            while (i <= n && a[i] ~ /^-/) {
+                if (a[i] == "--") { i++; break }
+                opt = a[i]
+                for (j = 2; j <= length(opt); j++) {
+                    flag = substr(opt, j, 1)
+                    if (flag == "T") no_tty = 1
+                    if (flag == "N" || flag == "f") exit 1
+                    if (index("BbcDEeFIiJLlmOopQRSWw", flag)) {
+                        if (flag == "D" || flag == "L") forwarding = 1
+                        if (j == length(opt)) {
+                            if (++i > n) exit 1
+                        }
+                        break
+                    }
+                    if (!index("1246AaCfgKkqstTVvXxYy", flag)) exit 1
+                }
+                i++
+            }
+            if (!forwarding || !no_tty || a[i] != wanted) exit 1
+            if (n != i + 4) exit 1
+            if (a[i+1] !~ /(^|\/)bash$/ || a[i+2] != "--login" || a[i+3] != "-c" || a[i+4] != "bash") exit 1
+            matched = 1
+        }
+        END { if (!matched) exit 1 }
+    '
+}
+
+codex_pid_parent() {
+    /bin/ps -p "$1" -o ppid= 2>/dev/null | tr -d '[:space:]'
+}
+
+codex_pid_executable_path() {
+    /bin/ps -ww -p "$1" -o comm= 2>/dev/null | sed 's/^[[:space:]]*//'
+}
+
+codex_pid_has_cursor_ancestor() (
+    cursor_pid=$1
+    cursor_depth=0
+    cursor_seen=" "
+    while [ "$cursor_depth" -lt 16 ]; do
+        cursor_pid=$(codex_pid_parent "$cursor_pid")
+        case "$cursor_pid" in ''|0|1|*[!0-9]*) return 1 ;; esac
+        case "$cursor_seen" in *" $cursor_pid "*) return 1 ;; esac
+        cursor_seen="$cursor_seen$cursor_pid "
+        case "$(codex_pid_executable_path "$cursor_pid")" in
+            */Cursor.app/Contents/MacOS/Cursor|*/Cursor.app/Contents/Frameworks/*/Contents/MacOS/Cursor\ Helper*)
+                return 0
+                ;;
+        esac
+        cursor_depth=$((cursor_depth + 1))
+    done
+    return 1
+)
+
+codex_pid_matches_cursor_session() (
+    [ "$(codex_pid_executable "$1")" = ssh ] || return 1
+    codex_command_has_cursor_signature "$2" "$(codex_pid_command "$1")" || return 1
+    codex_pid_has_cursor_ancestor "$1"
+)
+
 codex_pid_matches_tunnel() {
     codex_tunnel_pid_value=$1
     codex_tunnel_alias=$2
@@ -422,8 +512,13 @@ codex_pid_matches_controller() {
 
 codex_find_session_pids() {
     codex_find_session_alias=$1
+    codex_find_session_kind=${2:-all}
     for codex_find_session_pid in $(codex_ssh_pids); do
-        if codex_pid_matches_session "$codex_find_session_pid" "$codex_find_session_alias"; then
+        if [ "$codex_find_session_kind" != cursor ] && \
+            codex_pid_matches_session "$codex_find_session_pid" "$codex_find_session_alias"; then
+            printf '%s\n' "$codex_find_session_pid"
+        elif [ "$codex_find_session_kind" != codex ] && \
+            codex_pid_matches_cursor_session "$codex_find_session_pid" "$codex_find_session_alias"; then
             printf '%s\n' "$codex_find_session_pid"
         fi
     done

@@ -74,7 +74,7 @@ launchd_state() {
     fi
 }
 
-printf 'Type\tName\tDevAlias\tProxyAlias\tLaunchdState\tLaunchdPID\tActiveCodexSessions\tTunnelSSHProcesses\tProcessIDs\tLocalProxyReachable\n'
+printf 'Type\tName\tDevAlias\tProxyAlias\tLaunchdState\tLaunchdPID\tActiveCodexSessions\tTunnelSSHProcesses\tProcessIDs\tLocalProxyReachable\tActiveCursorSessions\n'
 controller_status=$(launchd_state "$controller_label")
 controller_state=$(printf '%s' "$controller_status" | awk -F '\t' '{print $1}')
 controller_pid=$(printf '%s' "$controller_status" | awk -F '\t' '{print $2}')
@@ -82,7 +82,7 @@ local_proxy_reachable=false
 if codex_tcp_ready "$local_proxy_host" "$local_proxy_port"; then
     local_proxy_reachable=true
 fi
-printf 'Controller\t%s\t-\t-\t%s\t%s\t-\t-\t-\t%s\n' \
+printf 'Controller\t%s\t-\t-\t%s\t%s\t-\t-\t-\t%s\t-\n' \
     "$controller_label" "$controller_state" "$controller_pid" "$local_proxy_reachable"
 
 for tunnel_name in $(codex_config_tunnel_names "$config_path"); do
@@ -92,9 +92,11 @@ for tunnel_name in $(codex_config_tunnel_names "$config_path"); do
     tunnel_status=$(launchd_state "$tunnel_label")
     tunnel_state=$(printf '%s' "$tunnel_status" | awk -F '\t' '{print $1}')
     tunnel_pid=$(printf '%s' "$tunnel_status" | awk -F '\t' '{print $2}')
-    session_pids=$(codex_find_session_pids "$dev_alias")
+    session_pids=$(codex_find_session_pids "$dev_alias" codex)
+    cursor_session_pids=$(codex_find_session_pids "$dev_alias" cursor)
     tunnel_pids=$(codex_find_tunnel_pids "$proxy_alias")
     session_count=$(count_lines "$session_pids")
+    cursor_session_count=$(count_lines "$cursor_session_pids")
     tunnel_count=$(count_lines "$tunnel_pids")
     if [ -n "$tunnel_pid" ] && [ "$tunnel_pid" != '-' ]; then
         case " $tunnel_pids " in
@@ -110,7 +112,7 @@ for tunnel_name in $(codex_config_tunnel_names "$config_path"); do
     else
         process_ids=-
     fi
-    printf 'Tunnel\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t-\n' \
+    printf 'Tunnel\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t-\t%s\n' \
         "$tunnel_name" "$dev_alias" "$proxy_alias" "$tunnel_state" "$tunnel_pid" \
-        "$session_count" "$tunnel_count" "$process_ids"
+        "$session_count" "$tunnel_count" "$process_ids" "$cursor_session_count"
 done

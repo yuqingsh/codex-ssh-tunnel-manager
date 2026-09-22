@@ -186,8 +186,7 @@ start_tunnel() {
         return 0
     fi
 
-    start_target=$(codex_launchd_target "$start_label")
-    if ! /bin/launchctl kickstart "$start_target" >/dev/null 2>&1; then
+    if ! codex_launchd_kickstart "$start_label" >/dev/null 2>&1; then
         start_failures=$((state_failures + 1))
         start_delay=$(retry_delay "$start_failures")
         start_retry_at=$((start_now + start_delay))
@@ -197,7 +196,7 @@ start_tunnel() {
     fi
 
     state_write "$start_name" "$start_now" 0 "$((start_now + poll_seconds))"
-    log_controller "检测到 Codex 远程会话，已请求启动隧道：$start_name ($start_alias)"
+    log_controller "检测到 Codex/Cursor 远程会话，已请求启动隧道：$start_name ($start_alias)"
 }
 
 run_cycle() {
@@ -223,9 +222,9 @@ run_cycle() {
         if [ -n "$cycle_tunnel_pid" ]; then
             if [ "$state_last_seen" -eq 0 ]; then
                 state_write "$cycle_name" "$cycle_now" 0 0
-                log_controller "未检测到 $cycle_dev_alias 的 Codex 会话，开始 ${stop_grace_minutes} 分钟停止宽限期"
+                log_controller "未检测到 $cycle_dev_alias 的 Codex/Cursor 会话，开始 ${stop_grace_minutes} 分钟停止宽限期"
             elif [ "$((cycle_now - state_last_seen))" -ge "$stop_grace_seconds" ]; then
-                log_controller "$cycle_dev_alias 已连续 ${stop_grace_minutes} 分钟没有 Codex 会话，停止隧道"
+                log_controller "$cycle_dev_alias 已连续 ${stop_grace_minutes} 分钟没有 Codex/Cursor 会话，停止隧道"
                 stop_tunnel "$cycle_name" "$cycle_proxy_alias" "$cycle_label"
                 state_reset "$cycle_name"
             fi
