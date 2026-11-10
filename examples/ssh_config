@@ -1,5 +1,15 @@
 # Copy the required blocks into ~/.ssh/config and replace placeholders.
 # Never commit the private key itself.
+#
+# Remote forwarding and multiple clients: every client that connects to the
+# same Linux host as the same user must forward a distinct loopback remote
+# port. If two clients use the same port, the second tunnel exits with
+# "remote port forwarding failed for listen port <port>". Convention: Windows
+# client 17897, macOS client 17898, further clients 17899 and above.
+# List the same ports in the Linux endpoint file (see
+# config/tunnel-endpoints.example.conf); the Codex wrapper probes the list and
+# uses the first healthy endpoint, so one offline client does not break the
+# others.
 
 Host primary-dev
     HostName dev-primary.example.com
