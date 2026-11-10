@@ -114,14 +114,15 @@ foreach ($requiredExecutable in @($powerShellExe, $wscriptExe)) {
 }
 $userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
+# Tunnel tasks are started and retried only by the demand controller. They must
+# not ask Task Scheduler to restart a failed task on its own schedule, because
+# that would bypass the controller's failure-kind backoff.
 $tunnelSettings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew `
-    -ExecutionTimeLimit ([TimeSpan]::Zero) `
-    -RestartCount 999 `
-    -RestartInterval (New-TimeSpan -Minutes 1)
+    -ExecutionTimeLimit ([TimeSpan]::Zero)
 
 foreach ($tunnel in $configuration.Tunnels) {
     $launcherPath = Join-Path $resolvedInstallRoot 'Start-CodexSshTunnel.ps1'

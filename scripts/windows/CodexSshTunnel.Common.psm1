@@ -136,9 +136,137 @@ function Test-CodexTcpEndpoint {
     }
 }
 
+function Get-CodexTunnelFailureKind {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$LogPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($LogPath) -or -not (Test-Path -LiteralPath $LogPath -PathType Leaf)) {
+        return 'unknown'
+    }
+
+    $logText = $null
+    try {
+        $logText = Get-Content -LiteralPath $LogPath -Raw -ErrorAction Stop
+    }
+    catch {
+        return 'unknown'
+    }
+
+    if ([string]::IsNullOrEmpty($logText)) {
+        return 'unknown'
+    }
+
+    $marker = 'Launcher started for'
+    $markerIndex = $logText.LastIndexOf($marker, [StringComparison]::OrdinalIgnoreCase)
+    if ($markerIndex -ge 0) {
+        $segment = $logText.Substring($markerIndex + $marker.Length)
+    }
+    else {
+        # Older logs have no launcher marker; only inspect the last 50 lines.
+        $lines = @($logText -split "\r?\n")
+        $tailStart = $lines.Count - [Math]::Min(50, $lines.Count)
+        $segment = (@($lines[$tailStart..($lines.Count - 1)]) -join "`n")
+    }
+
+    if ($segment -match 'remote port forwarding failed') {
+        return 'port-conflict'
+    }
+    if ($segment -match 'timed out|Connection refused|Could not resolve hostname|Network is unreachable|No route to host|Connection reset by peer|Broken pipe|Permission denied') {
+        return 'network'
+    }
+
+    return 'unknown'
+}
+
+function Get-CodexRetryDelay {
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Failures,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Kind,
+
+        [int]$BaseSeconds = 0,
+
+        [int]$MaxSeconds = 0
+    )
+
+    $normalizedKind = ''
+    if (-not [string]::IsNullOrWhiteSpace($Kind)) {
+        $normalizedKind = $Kind.Trim().ToLowerInvariant()
+    }
+
+    if ($normalizedKind -eq 'port-conflict') {
+        $defaultBase = 15
+        $defaultMax = 300
+    }
+    else {
+        $defaultBase = 30
+        $defaultMax = 600
+    }
+
+    # PowerShell variable names are case-insensitive, so the effective values
+    # must use names that differ from the -BaseSeconds/-MaxSeconds parameters.
+    $effectiveBase = $defaultBase
+    if ($BaseSeconds -gt 0) {
+        $effectiveBase = $BaseSeconds
+    }
+    $effectiveMax = $defaultMax
+    if ($MaxSeconds -gt 0) {
+        $effectiveMax = $MaxSeconds
+    }
+    if ($effectiveMax -lt $effectiveBase) {
+        $effectiveMax = $effectiveBase
+    }
+
+    $failureCount = $Failures
+    if ($failureCount -lt 1) {
+        $failureCount = 1
+    }
+
+    # Exponential backoff: base * 2^(failures - 1), capped at max seconds.
+    $delaySeconds = [long]$effectiveBase
+    $step = 1
+    while ($step -lt $failureCount -and $delaySeconds -lt $effectiveMax) {
+        $delaySeconds = $delaySeconds * 2
+        if ($delaySeconds -gt $effectiveMax) {
+            $delaySeconds = $effectiveMax
+        }
+        $step = $step + 1
+    }
+
+    # Add 0..base/4 seconds of jitter so clients do not retry in lockstep.
+    $jitterMaximum = [int][Math]::Floor($effectiveBase / 4)
+    $jitterSeconds = 0
+    if ($jitterMaximum -gt 0) {
+        $jitterSeconds = Get-Random -Minimum 0 -Maximum ($jitterMaximum + 1)
+    }
+    $delaySeconds = $delaySeconds + $jitterSeconds
+
+    $minimumDelaySeconds = 5
+    if ($delaySeconds -lt $minimumDelaySeconds) {
+        $delaySeconds = $minimumDelaySeconds
+    }
+    if ($delaySeconds -gt [int]::MaxValue) {
+        $delaySeconds = [int]::MaxValue
+    }
+
+    return [int]$delaySeconds
+}
+
 Export-ModuleMember -Function @(
     'Import-CodexTunnelConfiguration',
     'Get-CodexRemoteSessionPattern',
     'Get-CodexProxyTunnelPattern',
-    'Test-CodexTcpEndpoint'
+    'Test-CodexTcpEndpoint',
+    'Get-CodexTunnelFailureKind',
+    'Get-CodexRetryDelay'
 )
