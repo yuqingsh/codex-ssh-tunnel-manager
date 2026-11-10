@@ -110,6 +110,32 @@ run_cycle
 test_now=4000
 run_cycle
 [ "$test_starts" = 1 ]
+
+# Failed starts must back off exponentially instead of hammering SSH every poll.
+test_demand=cursor
+test_running=0
+test_starts=0
+test_now=5000
+codex_launchd_kickstart() { test_starts=$((test_starts + 1)); }
+run_cycle
+[ "$test_starts" = 1 ] || exit 95
+test_now=5005
+run_cycle
+[ "$test_starts" = 1 ] || exit 96
+test_now=5020
+run_cycle
+[ "$test_starts" = 1 ] || exit 97
+test_now=5035
+run_cycle
+[ "$test_starts" = 2 ] || exit 98
+test_now=5040
+run_cycle
+test_now=5099
+run_cycle
+[ "$test_starts" = 2 ] || exit 99
+test_now=5100
+run_cycle
+[ "$test_starts" = 3 ] || exit 100
 TEST
 CODEX_SSH_TUNNEL_STATE_ROOT="$check_tmp/state" \
 CODEX_SSH_TUNNEL_LOG_ROOT="$check_tmp/log" \

@@ -62,6 +62,17 @@ state_root=${CODEX_SSH_TUNNEL_STATE_ROOT:-$(codex_default_state_root)}
 runner_path="$install_root/codex-ssh-tunnel-runner.sh"
 stop_grace_seconds=$((stop_grace_minutes * 60))
 
+# 隧道启动失败退避：服务器重启或网络抖动时，避免高频 SSH 重试触发远端防火墙封禁。
+tunnel_retry_base_seconds=${CODEX_SSH_TUNNEL_RETRY_BASE_SECONDS:-30}
+tunnel_retry_max_seconds=${CODEX_SSH_TUNNEL_RETRY_MAX_SECONDS:-600}
+tunnel_healthy_seconds=${CODEX_SSH_TUNNEL_HEALTHY_SECONDS:-60}
+case "$tunnel_retry_base_seconds" in ''|*[!0-9]*|0) tunnel_retry_base_seconds=30 ;; esac
+case "$tunnel_retry_max_seconds" in ''|*[!0-9]*|0) tunnel_retry_max_seconds=600 ;; esac
+case "$tunnel_healthy_seconds" in ''|*[!0-9]*|0) tunnel_healthy_seconds=60 ;; esac
+if [ "$tunnel_retry_max_seconds" -lt "$tunnel_retry_base_seconds" ]; then
+    tunnel_retry_max_seconds=$tunnel_retry_base_seconds
+fi
+
 mkdir -p "$state_root" || {
     printf '无法创建状态目录：%s\n' "$state_root" >&2
     exit 1
@@ -74,7 +85,7 @@ state_path() {
 
 state_reset() {
     state_file=$(state_path "$1")
-    printf '0\n0\n0\n' > "$state_file"
+    printf '0\n0\n0\n0\n' > "$state_file"
     chmod 600 "$state_file" 2>/dev/null || true
 }
 
@@ -86,33 +97,21 @@ state_read() {
     state_last_seen=$(sed -n '1p' "$state_file" 2>/dev/null || printf '0')
     state_failures=$(sed -n '2p' "$state_file" 2>/dev/null || printf '0')
     state_retry_at=$(sed -n '3p' "$state_file" 2>/dev/null || printf '0')
+    state_started_at=$(sed -n '4p' "$state_file" 2>/dev/null || printf '0')
     case "$state_last_seen" in ''|*[!0-9]*) state_last_seen=0 ;; esac
     case "$state_failures" in ''|*[!0-9]*) state_failures=0 ;; esac
     case "$state_retry_at" in ''|*[!0-9]*) state_retry_at=0 ;; esac
+    case "$state_started_at" in ''|*[!0-9]*) state_started_at=0 ;; esac
 }
 
 state_write() {
     state_file=$(state_path "$1")
-    printf '%s\n%s\n%s\n' "$2" "$3" "$4" > "$state_file"
+    printf '%s\n%s\n%s\n%s\n' "$2" "$3" "$4" "$5" > "$state_file"
     chmod 600 "$state_file" 2>/dev/null || true
 }
 
 count_lines() {
     printf '%s\n' "$1" | awk 'NF { count += 1 } END { print count + 0 }'
-}
-
-retry_delay() {
-    retry_failures=$1
-    retry_delay_value=$poll_seconds
-    retry_step=1
-    while [ "$retry_step" -lt "$retry_failures" ] && [ "$retry_delay_value" -lt 300 ]; do
-        retry_delay_value=$((retry_delay_value * 2))
-        if [ "$retry_delay_value" -gt 300 ]; then
-            retry_delay_value=300
-        fi
-        retry_step=$((retry_step + 1))
-    done
-    printf '%s\n' "$retry_delay_value"
 }
 
 log_controller() {
@@ -173,29 +172,30 @@ start_tunnel() {
 
     start_existing_pid=$(codex_find_tunnel_pid "$start_label" "$start_alias" "$runner_path")
     if [ -n "$start_existing_pid" ]; then
-        state_write "$start_name" "$start_now" 0 0
+        state_write "$start_name" "$start_now" 0 0 "$start_now"
         return 0
     fi
 
     if ! codex_tcp_ready "$local_proxy_host" "$local_proxy_port"; then
         start_failures=$((state_failures + 1))
-        start_delay=$(retry_delay "$start_failures")
+        start_delay=$(codex_retry_delay "$start_failures" "$poll_seconds" 300)
         start_retry_at=$((start_now + start_delay))
-        state_write "$start_name" "$start_now" "$start_failures" "$start_retry_at"
+        state_write "$start_name" "$start_now" "$start_failures" "$start_retry_at" 0
         log_controller "Clash 不可用：$local_proxy_host:$local_proxy_port；$start_delay 秒后重试 $start_name"
         return 0
     fi
 
     if ! codex_launchd_kickstart "$start_label" >/dev/null 2>&1; then
         start_failures=$((state_failures + 1))
-        start_delay=$(retry_delay "$start_failures")
+        start_delay=$(codex_retry_delay "$start_failures" "$poll_seconds" 300)
         start_retry_at=$((start_now + start_delay))
-        state_write "$start_name" "$start_now" "$start_failures" "$start_retry_at"
+        state_write "$start_name" "$start_now" "$start_failures" "$start_retry_at" 0
         log_controller "无法按需启动 launchd 隧道任务：$start_label；$start_delay 秒后重试"
         return 0
     fi
 
-    state_write "$start_name" "$start_now" 0 "$((start_now + poll_seconds))"
+    # 记录本次启动时间；若下一次轮询时隧道进程仍不存在，run_cycle 会计入失败并退避。
+    state_write "$start_name" "$start_now" "$state_failures" 0 "$start_now"
     log_controller "检测到 Codex/Cursor 远程会话，已请求启动隧道：$start_name ($start_alias)"
 }
 
@@ -210,18 +210,46 @@ run_cycle() {
         state_read "$cycle_name"
 
         if [ -n "$cycle_session_pids" ]; then
-            if [ -z "$cycle_tunnel_pid" ]; then
-                state_write "$cycle_name" "$cycle_now" "$state_failures" "$state_retry_at"
-                start_tunnel "$cycle_name" "$cycle_proxy_alias" "$cycle_label" "$cycle_now"
-            else
-                state_write "$cycle_name" "$cycle_now" 0 0
+            if [ -n "$cycle_tunnel_pid" ]; then
+                if [ "$state_started_at" -eq 0 ]; then
+                    state_write "$cycle_name" "$cycle_now" "$state_failures" "$state_retry_at" "$cycle_now"
+                elif [ "$state_failures" -gt 0 ] && \
+                    [ "$((cycle_now - state_started_at))" -ge "$tunnel_healthy_seconds" ]; then
+                    state_write "$cycle_name" "$cycle_now" 0 0 "$state_started_at"
+                    log_controller "隧道 $cycle_name 已稳定运行，重置启动失败计数"
+                else
+                    state_write "$cycle_name" "$cycle_now" "$state_failures" "$state_retry_at" "$state_started_at"
+                fi
+                continue
             fi
+
+            # 上一次启动尝试过、但现在进程不存在：计为失败，并指数退避，
+            # 避免服务器重启或网络故障期间高频 SSH 连接触发远端防火墙封禁。
+            if [ "$state_started_at" -ne 0 ]; then
+                cycle_failures=$((state_failures + 1))
+                cycle_delay=$(codex_retry_delay "$cycle_failures" "$tunnel_retry_base_seconds" "$tunnel_retry_max_seconds")
+                cycle_retry_at=$((cycle_now + cycle_delay))
+                state_write "$cycle_name" "$cycle_now" "$cycle_failures" "$cycle_retry_at" 0
+                log_controller "隧道 $cycle_name 启动失败（连续第 ${cycle_failures} 次）；${cycle_delay} 秒后重试"
+                if [ "$cycle_failures" -ge 3 ]; then
+                    log_controller "提示：连续启动失败可能由服务器未就绪、网络中断或远端防火墙封禁本机公网 IP 引起；请勿手动高频重试"
+                fi
+                continue
+            fi
+
+            if [ "$cycle_now" -lt "$state_retry_at" ]; then
+                state_write "$cycle_name" "$cycle_now" "$state_failures" "$state_retry_at" 0
+                continue
+            fi
+
+            state_write "$cycle_name" "$cycle_now" "$state_failures" "$state_retry_at" 0
+            start_tunnel "$cycle_name" "$cycle_proxy_alias" "$cycle_label" "$cycle_now"
             continue
         fi
 
         if [ -n "$cycle_tunnel_pid" ]; then
             if [ "$state_last_seen" -eq 0 ]; then
-                state_write "$cycle_name" "$cycle_now" 0 0
+                state_write "$cycle_name" "$cycle_now" 0 0 "$state_started_at"
                 log_controller "未检测到 $cycle_dev_alias 的 Codex/Cursor 会话，开始 ${stop_grace_minutes} 分钟停止宽限期"
             elif [ "$((cycle_now - state_last_seen))" -ge "$stop_grace_seconds" ]; then
                 log_controller "$cycle_dev_alias 已连续 ${stop_grace_minutes} 分钟没有 Codex/Cursor 会话，停止隧道"

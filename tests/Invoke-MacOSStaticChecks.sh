@@ -50,6 +50,15 @@ if ! codex_config_validate "$example_config"; then
     fail 'macOS 示例配置校验失败'
 fi
 
+if [ "$(codex_retry_delay 1 30 600)" != '30' ] || \
+    [ "$(codex_retry_delay 2 30 600)" != '60' ] || \
+    [ "$(codex_retry_delay 4 30 600)" != '240' ] || \
+    [ "$(codex_retry_delay 6 30 600)" != '600' ] || \
+    [ "$(codex_retry_delay 9 30 600)" != '600' ] || \
+    [ "$(codex_retry_delay 1 5 300)" != '5' ]; then
+    fail '启动失败退避计算不正确'
+fi
+
 tunnel_names=$(codex_config_tunnel_names "$example_config" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 if [ "$tunnel_names" != 'primary secondary' ]; then
     fail "macOS 示例隧道列表不正确：$tunnel_names"
@@ -117,9 +126,12 @@ assert_file_contains "$setup_script" 'trap' '初始化向导未清理临时目�
 assert_file_contains "$setup_script" 'RemoteForward 127.0.0.1:' '初始化向导未生成 loopback RemoteForward'
 assert_file_contains "$setup_script" 'codex_config_validate' '初始化向导未校验生成的配置'
 assert_file_contains "$setup_script" 'gsub(/\]:/, ":", remote)' '初始化向导未兼容 ssh -G 的括号化回环地址'
-assert_file_contains "$controller_script" 'state_write "$start_name" "$start_now" 0 0' 'controller 未按隧道名称写入已存在隧道状态'
-assert_file_contains "$controller_script" 'state_write "$start_name" "$start_now" "$start_failures" "$start_retry_at"' 'controller 未按隧道名称写入启动失败状态'
-assert_file_contains "$controller_script" 'state_write "$cycle_name" "$cycle_now" "$state_failures" "$state_retry_at"' 'controller 未按隧道名称写入会话状态'
+assert_file_contains "$controller_script" 'state_write "$start_name" "$start_now" 0 0 "$start_now"' 'controller 未按隧道名称写入已存在隧道状态'
+assert_file_contains "$controller_script" 'state_write "$start_name" "$start_now" "$start_failures" "$start_retry_at" 0' 'controller 未按隧道名称写入启动失败状态'
+assert_file_contains "$controller_script" 'state_write "$cycle_name" "$cycle_now" "$state_failures" "$state_retry_at" 0' 'controller 未按隧道名称写入会话状态'
+assert_file_contains "$controller_script" 'codex_retry_delay "$cycle_failures" "$tunnel_retry_base_seconds" "$tunnel_retry_max_seconds"' 'controller 未对隧道启动失败应用指数退避'
+assert_file_contains "$controller_script" 'tunnel_healthy_seconds' 'controller 未定义稳定运行阈值'
+assert_file_contains "$common_path" 'codex_retry_delay()' 'common 缺少退避计算函数'
 if grep -E 'state_write "\$(start_now|cycle_now)"' "$controller_script" >/dev/null 2>&1; then
     fail 'controller 存在缺少隧道名称参数的 state_write 调用'
 fi

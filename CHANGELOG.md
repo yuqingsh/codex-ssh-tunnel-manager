@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- Fix macOS controller retry storms against unreachable or rebooting hosts: count failed tunnel starts, apply exponential backoff from 30 seconds up to 10 minutes, reset after 60 seconds of healthy uptime, and log diagnostics that warn about remote firewall IP bans before retrying.
 - Document Cursor native Agent's separate inference route: proxy environment variables alone do not cover its remote HTTP/2 transport. Configure the built-in local-client hop per remote, and require an actual chat response plus route verification when validating the setup.
 - Fix macOS controller state writes so the tunnel name and all state fields are passed consistently under POSIX shell `set -u`.
 

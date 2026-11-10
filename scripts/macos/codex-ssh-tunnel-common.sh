@@ -309,6 +309,31 @@ codex_tcp_ready() {
     /usr/bin/nc -z -w 2 "$codex_tcp_host" "$codex_tcp_port" >/dev/null 2>&1
 }
 
+codex_retry_delay() {
+    # 指数退避：第 1 次失败返回 base，之后每次翻倍，上限 max。
+    codex_retry_failures=$1
+    codex_retry_base=$2
+    codex_retry_max=$3
+    case "$codex_retry_failures" in ''|*[!0-9]*) codex_retry_failures=1 ;; esac
+    case "$codex_retry_base" in ''|*[!0-9]*|0) codex_retry_base=1 ;; esac
+    case "$codex_retry_max" in ''|*[!0-9]*|0) codex_retry_max=$codex_retry_base ;; esac
+    if [ "$codex_retry_max" -lt "$codex_retry_base" ]; then
+        codex_retry_max=$codex_retry_base
+    fi
+
+    codex_retry_value=$codex_retry_base
+    codex_retry_step=1
+    while [ "$codex_retry_step" -lt "$codex_retry_failures" ] && \
+        [ "$codex_retry_value" -lt "$codex_retry_max" ]; do
+        codex_retry_value=$((codex_retry_value * 2))
+        if [ "$codex_retry_value" -gt "$codex_retry_max" ]; then
+            codex_retry_value=$codex_retry_max
+        fi
+        codex_retry_step=$((codex_retry_step + 1))
+    done
+    printf '%s\n' "$codex_retry_value"
+}
+
 codex_ssh_pids() {
     /usr/bin/pgrep -x ssh 2>/dev/null || true
 }
