@@ -329,6 +329,28 @@ check_remote_wrapper() {
     return 1
 }
 
+# 安装完成后给出 Linux 端点列表的参考配置；脚本本身绝不修改远端。
+print_linux_endpoint_hint() {
+    setup_hint_port=$1
+    setup_hint_endpoints='http://127.0.0.1:17897'
+    if [ "$setup_hint_port" != '17897' ]; then
+        setup_hint_endpoints="$setup_hint_endpoints http://127.0.0.1:$setup_hint_port"
+    fi
+    setup_hint_args=
+    for setup_hint_endpoint in $setup_hint_endpoints; do
+        setup_hint_args="$setup_hint_args --endpoint $setup_hint_endpoint"
+    done
+
+    printf '\n建议在 Linux 上配置 wrapper 端点列表（同一台 Linux 上每台客户端端口必须不同）：\n'
+    printf '  ~/.config/codex-ssh-tunnel-manager/endpoints.conf\n'
+    for setup_hint_endpoint in $setup_hint_endpoints; do
+        printf '  %s\n' "$setup_hint_endpoint"
+    done
+    printf 'Windows 客户端保留 17897，本机使用 %s；更多客户端依次使用 17899 及以上。\n' "$setup_hint_port"
+    printf '然后在 Linux 上运行（本项目不会自动修改远端）：\n'
+    printf '  scripts/linux/install-codex-wrapper.sh%s\n' "$setup_hint_args"
+}
+
 setup_ssh_mode=
 config_output="$repository_root/config/tunnels.macos.conf"
 skip_remote_check=0
@@ -400,7 +422,7 @@ if ! validate_port_input "$setup_local_proxy_port"; then
     printf 'Clash 端口无效：%s\n' "$setup_local_proxy_port" >&2
     exit 65
 fi
-setup_remote_proxy_port=$(prompt_default 'Linux 端反向代理端口' 17897)
+setup_remote_proxy_port=$(prompt_default 'Linux 端反向代理端口（同一 Linux 上每台客户端端口必须不同：Windows 常用 17897、macOS 常用 17898）' 17898)
 if ! validate_port_input "$setup_remote_proxy_port"; then
     printf 'Linux 反向代理端口无效：%s\n' "$setup_remote_proxy_port" >&2
     exit 65
@@ -526,6 +548,8 @@ if [ "$skip_remote_check" -eq 0 ]; then
 else
     printf '已跳过只读 SSH 登录和 Linux wrapper 检查。\n'
 fi
+
+print_linux_endpoint_hint "$setup_remote_proxy_port"
 
 if [ "$no_install" -eq 1 ]; then
     printf '配置已生成：%s\n' "$config_output"

@@ -297,6 +297,85 @@ codex_log() {
     printf '%s [%s] %s\n' "$(codex_utc_timestamp)" "$codex_log_component" "$*" >> "$codex_log_path"
 }
 
+# 隧道 runner 的 stderr 由 launchd StandardErrorPath 收集到固定文件；
+# 该文件是控制器判断 SSH 失败原因（端口冲突 / 网络故障）的唯一来源。
+codex_tunnel_stderr_log() {
+    codex_tunnel_stderr_name=$1
+    printf '%s/%s-tunnel.stderr.log\n' "$(codex_default_log_root)" "$codex_tunnel_stderr_name"
+}
+
+# 输出最近一次 runner marker 之后的 stderr 文本。没有 marker 时退回文件尾部
+# 50 行，文件不存在或不可读时输出空字符串（调用方应始终视为 unknown）。
+codex_last_tunnel_error() {
+    codex_last_error_name=$1
+    codex_last_error_path=$(codex_tunnel_stderr_log "$codex_last_error_name") || return 0
+    if [ -z "$codex_last_error_path" ] || [ ! -f "$codex_last_error_path" ]; then
+        return 0
+    fi
+    if [ ! -r "$codex_last_error_path" ]; then
+        return 0
+    fi
+
+    codex_last_error_marker_line=$(
+        grep -n -F '[runner-marker]' "$codex_last_error_path" 2>/dev/null |
+            tail -n 1 | sed 's/:.*//'
+    )
+    case "$codex_last_error_marker_line" in
+        ''|*[!0-9]*)
+            tail -n 50 "$codex_last_error_path" 2>/dev/null || true
+            ;;
+        *)
+            codex_last_error_marker_line=$((codex_last_error_marker_line + 1))
+            sed -n "${codex_last_error_marker_line},\$p" "$codex_last_error_path" 2>/dev/null || true
+            ;;
+    esac
+    return 0
+}
+
+# 把 SSH stderr 文本归类为 port-conflict、network 或 unknown。
+# 端口冲突必须优先判断：它同样可能伴随 "Permission denied" 等字样。
+codex_classify_tunnel_error() {
+    codex_classify_text=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+    case "$codex_classify_text" in
+        *'remote port forwarding failed'*)
+            printf 'port-conflict\n'
+            ;;
+        *'timed out'*|*'connection refused'*|*'could not resolve hostname'*|*'network is unreachable'*|*'no route to host'*|*'connection reset by peer'*|*'broken pipe'*|*'permission denied'*)
+            printf 'network\n'
+            ;;
+        *)
+            printf 'unknown\n'
+            ;;
+    esac
+}
+
+# 在退避时间上叠加 0..base/4 的确定性抖动（同一 base/now 总是得到同一结果），
+# 最小值 5 秒。确定性便于测试，也能分散两台客户端在同一秒触发的重试。
+codex_jittered_delay() {
+    codex_jitter_base=$1
+    codex_jitter_now=${2:-0}
+    case "$codex_jitter_base" in
+        ''|*[!0-9]*)
+            codex_jitter_base=5
+            ;;
+    esac
+    case "$codex_jitter_now" in
+        ''|*[!0-9]*)
+            codex_jitter_now=0
+            ;;
+    esac
+    if [ "$codex_jitter_base" -lt 5 ]; then
+        codex_jitter_base=5
+    fi
+
+    codex_jitter_span=$((codex_jitter_base / 4))
+    codex_jitter_offset=0
+    if [ "$codex_jitter_span" -gt 0 ]; then
+        codex_jitter_offset=$((codex_jitter_now % (codex_jitter_span + 1)))
+    fi
+    printf '%s\n' "$((codex_jitter_base + codex_jitter_offset))"
+}
+
 codex_tcp_ready() {
     codex_tcp_host=$1
     codex_tcp_port=$2

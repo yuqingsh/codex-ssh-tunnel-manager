@@ -84,6 +84,10 @@ done
 
 codex_log "$log_component" "Clash 已就绪，启动 ssh -N -T $proxy_alias" || true
 
+# launchd 把 stderr 写到 <name>-tunnel.stderr.log；控制器通过这一行 marker
+# 区分“本次启动之后的 SSH 错误”与更早的历史错误。marker 必须写在 exec 之前。
+printf '[runner-marker] %s alias=%s\n' "$(codex_utc_timestamp)" "$proxy_alias" >&2
+
 # RemoteForward 必须由用户 SSH 配置中的 proxy alias 提供；这里不把真实
 # 主机、用户名或远端地址写入仓库，也不覆盖用户的 SSH 主机校验设置。
 exec /usr/bin/ssh \

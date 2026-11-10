@@ -13,23 +13,37 @@
 
 ~~~text
 Linux Codex
-  -> Linux 127.0.0.1:17897
+  -> Linux 127.0.0.1:17898（macOS 客户端端口）
   -> SSH RemoteForward
   -> macOS 127.0.0.1:7897
   -> Clash Verge
   -> OpenAI services
 ~~~
 
-Linux 端的 Codex wrapper 将 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY 及其小写形式指向 Linux 的 127.0.0.1:17897。
+Linux 端的 Codex wrapper 从端点列表 `~/.config/codex-ssh-tunnel-manager/endpoints.conf` 读取候选端点，按顺序探测后选择第一个健康的代理，并将其写入 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY 及其小写形式。单客户端时也可以只保留一个端点。
 
 SSH 的 proxy alias 必须在 macOS 的 SSH 配置中定义 RemoteForward：
 
 ~~~text
-RemoteForward 127.0.0.1:17897 127.0.0.1:7897
+RemoteForward 127.0.0.1:17898 127.0.0.1:7897
 ExitOnForwardFailure yes
 ~~~
 
 远端代理监听地址必须保持为 127.0.0.1，不能改为 0.0.0.0。
+
+## 多客户端端口分配
+
+同一台 Linux 开发机、同一个 Linux 用户下，每台客户端必须占用一个独立的远端回环端口。Linux 只监听客户端指定的端口，先连上的客户端独占该端口；端口相同时后连接的客户端会持续收到 `remote port forwarding failed for listen port ...`。
+
+| 客户端 | 建议远端端口 | 说明 |
+| --- | --- | --- |
+| Windows | 17897 | 保持现有默认值 |
+| macOS | 17898 | 本项目初始化向导的默认值 |
+| 更多客户端 | 17899 及以上 | 依次递增，并加入 Linux 端点列表 |
+
+端口只绑定在 Linux 的 127.0.0.1 上，所以不同 Linux 主机可以复用同一端口；端口分配只要求在同一台 Linux、同一个用户下唯一。Linux wrapper 的端点列表按客户端端口逐行配置，具体见后文“配置 Linux 端点列表（多客户端）”。
+
+macOS 控制器会读取 tunnel 进程的 stderr 判断失败原因：远端端口冲突与网络故障使用不同的退避曲线。
 
 ## 前置条件
 
@@ -54,11 +68,12 @@ macOS 需要具备：
 向导会依次处理：
 
 - 探测 `127.0.0.1:7897` 和 `127.0.0.1:33331`，并让用户确认 Clash HTTP/mixed 端口；
-- 询问要管理的 Linux 设备、开发 alias、代理 alias、主机名、用户名、SSH 端口和 `IdentityFile`；
+- 询问要管理的 Linux 设备、远端代理端口（默认 17898）、开发 alias、代理 alias、主机名、用户名、SSH 端口和 `IdentityFile`；同一台 Linux 上每台客户端端口必须不同，Windows 常用 17897、macOS 用 17898；
 - 生成被 Git 忽略且权限为 `600` 的 `config/tunnels.macos.conf`；
 - 在明确确认后，生成 `~/.ssh/codex-ssh-tunnel-manager.conf`，并在 `~/.ssh/config` 顶部加入指向该文件的绝对路径 `Include`；已有本项目文件和 SSH 配置会先备份到 `~/.ssh/backups/`；
 - 只读验证 SSH alias、`RemoteForward`、SSH 登录和 Linux wrapper；
-- 调用现有安装器加载用户级 launchd 控制器。
+- 调用现有安装器加载用户级 launchd 控制器；
+- 结束时打印建议的 Linux 端点配置片段，以及在 Linux 上运行 `scripts/linux/install-codex-wrapper.sh --endpoint ...` 的提示。向导不会修改远端。
 
 如果已经手动准备好 SSH alias，使用：
 
@@ -106,7 +121,7 @@ Host primary-proxy
     Port 22
     IdentityFile ~/.ssh/id_ed25519_codex_devbox
     IdentitiesOnly yes
-    RemoteForward 127.0.0.1:17897 127.0.0.1:7897
+    RemoteForward 127.0.0.1:17898 127.0.0.1:7897
     ExitOnForwardFailure yes
     ServerAliveInterval 30
     ServerAliveCountMax 3
@@ -131,6 +146,49 @@ ssh primary-dev 'test -x "$HOME/.local/bin/codex" && test -e "$HOME/.local/bin/c
 ~~~
 
 如果检查失败，应先确认 wrapper 是否真的缺失，再由用户明确授权后执行 scripts/linux/install-codex-wrapper.sh。不要在未授权时远程安装或覆盖文件。
+
+## 配置 Linux 端点列表（多客户端）
+
+在让多台客户端共用同一台 Linux 之前，先在 Linux 上配置端点列表。文件固定为：
+
+~~~text
+~/.config/codex-ssh-tunnel-manager/endpoints.conf
+~~~
+
+每行一个候选端点，按探测顺序排列，空行和 `#` 注释会被忽略：
+
+~~~text
+# Windows 客户端
+http://127.0.0.1:17897
+# macOS 客户端
+http://127.0.0.1:17898
+~~~
+
+在 Linux 上运行安装脚本（`--endpoint` 可重复；脚本会先备份旧端点文件）：
+
+~~~bash
+./scripts/linux/install-codex-wrapper.sh \
+    --endpoint http://127.0.0.1:17897 \
+    --endpoint http://127.0.0.1:17898
+~~~
+
+只有 macOS 客户端时，也可以只写 `http://127.0.0.1:17898`。不要修改远端 Linux，除非已经获得明确授权；macOS 初始化向导只会打印建议片段。
+
+只读验证端点文件与探测结果：
+
+~~~bash
+ssh primary-dev 'cat ~/.config/codex-ssh-tunnel-manager/endpoints.conf'
+ssh primary-dev 'curl --connect-timeout 1 --max-time 3 -s -o /dev/null -w "%{http_code}\n" --proxy http://127.0.0.1:17898 http://codex-tunnel-probe.invalid/'
+~~~
+
+需要更完整的验证时，在 Linux 仓库目录运行 `scripts/linux/verify-remote-codex.sh`，输出会逐个列出：
+
+~~~text
+ENDPOINT=http://127.0.0.1:17897 PROBE=unhealthy
+ENDPOINT=http://127.0.0.1:17898 PROBE=healthy
+~~~
+
+wrapper 会按顺序选择第一个 `healthy` 端点；所有端点都不可用时回退第一个端点并在状态日志中告警。在 Linux 上设置 `CODEX_TUNNEL_DEBUG=1` 可以看到实际选择结果（`selected=<url> reason=<env|single|probe|fallback>`）。
 
 ## 第三步：验证实际 Codex SSH 命令
 
@@ -188,8 +246,8 @@ ssh -N -T primary-proxy
 在另一个终端或通过 SSH 只读验证 Linux 端口：
 
 ~~~bash
-ssh primary-dev 'nc -z -w3 127.0.0.1 17897'
-ssh primary-dev 'curl --proxy http://127.0.0.1:17897 -I --max-time 20 https://api.openai.com/'
+ssh primary-dev 'nc -z -w3 127.0.0.1 17898'
+ssh primary-dev 'curl --proxy http://127.0.0.1:17898 -I --max-time 20 https://api.openai.com/'
 ~~~
 
 未认证 API 请求返回 HTTP 401，只要 curl 的传输退出码为 0，仍然说明 TCP、TLS 和代理链路已经打通。
@@ -253,7 +311,7 @@ launchctl print gui/$(id -u)/com.codex.ssh-tunnel-manager.tunnel.primary
 3. 打开 Codex App 的 Linux 远程项目；
 4. controller 自动识别 DevAlias；
 5. 对应 ProxyAlias 的反向隧道自动建立；
-6. Linux Codex 通过 wrapper 使用 127.0.0.1:17897；
+6. Linux Codex 的 wrapper 从端点列表选择本机端口（macOS 默认 127.0.0.1:17898，Windows 默认 127.0.0.1:17897）；
 7. 远程会话关闭后，默认等待 10 分钟再停止。
 
 用户不需要手动执行 ssh -N -T，也不需要在 Codex 中额外选择“代理设备”。
@@ -269,7 +327,7 @@ launchctl print gui/$(id -u)/com.codex.ssh-tunnel-manager.tunnel.primary
 输出字段包括：
 
 - controller 或 tunnel 类型；
-- DevAlias 和 ProxyAlias；
+- DevAlias、ProxyAlias 和配置中的远端代理端口（RemoteProxyPort）；
 - launchd 状态和 PID；
 - 当前 Codex SSH 会话数量；
 - 当前隧道 SSH 进程数量；
@@ -294,6 +352,8 @@ controller.stderr.log
 primary-tunnel.stdout.log
 primary-tunnel.stderr.log
 ~~~
+
+`<name>-tunnel.stderr.log` 里的 `[runner-marker]` 行标记每次 runner 启动。控制器只读取最后一次 marker 之后的文本，用来区分“远端端口冲突”和“网络故障”；更早的历史错误不会影响当前分类。
 
 宽限期和重试状态位于：
 
@@ -340,9 +400,9 @@ nc -vz 127.0.0.1 7897
 
 然后查看 primary-tunnel-YYYYMMDD.log 和对应的 launchd stderr 日志。
 
-### 隧道反复启动失败或来源 IP 被远端防火墙封禁
+### 网络故障或来源 IP 被远端防火墙封禁
 
-控制器对隧道启动失败采用指数退避：连续失败从 30 秒开始翻倍，最长 600 秒；隧道稳定运行 60 秒后失败计数清零。日志可能出现：
+无法连接、超时、拒绝连接、DNS 解析失败等网络类失败使用指数退避：连续失败从 30 秒开始翻倍，最长 600 秒；隧道稳定运行 60 秒后失败计数清零。日志可能出现：
 
 ~~~text
 [controller] 隧道 primary 启动失败（连续第 3 次）；120 秒后重试
@@ -356,7 +416,35 @@ nc -vz 127.0.0.1 7897
 3. 联系服务商确认封禁策略，解封并把常用出口 IP 加入白名单，或放宽 SSH 连接频率限制；
 4. 保持 SSH 控制通道直连：不要把 Clash 设为全局代理或让 TUN 接管 SSH。需要透明代理时，可对 SSH 入口 IP 配置 DIRECT 规则，或关闭 TUN 模式。
 
-### SSH 断开或远端端口冲突
+### 远端端口冲突（remote port forwarding failed）
+
+日志或 tunnel stderr 中出现 `remote port forwarding failed for listen port <端口>` 时，表示 Linux 上该回环端口已经被占用，通常来自另一台客户端或远端残留的旧 SSH 连接。端口冲突和网络故障的退避是分开的：
+
+- 端口冲突：首次约 15 秒，按 2 倍递增，上限 300 秒，另加 0..25% 的抖动；日志会明确写出“远端端口被占用（可能来自另一台客户端或残留连接）；N 秒后重试”；
+- 连续第 2 次冲突起，日志会提示检查本机 `REMOTE_PROXY_PORT` 是否与其他客户端重复，并清理远端旧连接；
+- 网络/未知故障：保持 30 秒起步、600 秒上限的退避，并保留远端防火墙封禁提示。
+
+排查顺序：
+
+1. 在 macOS 上确认本机配置的远端端口：
+
+   ~~~bash
+   grep REMOTE_PROXY_PORT \
+       "$HOME/Library/Application Support/Codex/ssh-tunnel-manager/tunnels.macos.conf"
+   ~~~
+
+2. 在 Linux 上只读查看回环端口占用和端点列表：
+
+   ~~~bash
+   ss -ltnp | grep -E '127\.0\.0\.1:1789[0-9]'
+   cat ~/.config/codex-ssh-tunnel-manager/endpoints.conf
+   ~~~
+
+3. 对照端口分配表确认没有两台客户端使用同一个端口；需要改端口时，同时修改本机 `REMOTE_PROXY_PORT` 和 SSH proxy alias 的 `RemoteForward`，再重新运行安装器，并更新 Linux 端点列表。
+4. 对远端残留连接只做只读确认，不要使用 pkill ssh 或 killall ssh；终止进程前必须同时确认 PID、可执行文件名称和配置中的精确 alias。
+5. Linux 上已有的 Codex 会话可能需要重开，wrapper 才会再次探测端点列表。
+
+### SSH 断开或重复隧道
 
 确认是否存在重复的 proxy alias 隧道：
 
@@ -400,7 +488,7 @@ macOS 部署完成后应满足：
 - 登录 macOS 后 controller 自动恢复；
 - 无 Codex 或 Cursor 远程会话时隧道保持停止；
 - 打开对应远程项目后隧道自动建立；
-- Linux 端能通过 127.0.0.1:17897 经 Clash 出网；
+- Linux 端能通过本机端点（macOS 默认 127.0.0.1:17898）经 Clash 出网；
 - Clash 暂停后会记录并重试；
 - SSH 断开后不会产生重复隧道；
 - 远程会话关闭后经过宽限时间停止；
@@ -414,13 +502,13 @@ Cursor 与 Codex 使用配置中同一个开发 alias，例如 `primary-dev`。�
 
 ```json
 {
-  "remote.SSH.httpProxy": { "primary-dev": "http://127.0.0.1:17897" },
-  "remote.SSH.httpsProxy": { "primary-dev": "http://127.0.0.1:17897" },
+  "remote.SSH.httpProxy": { "primary-dev": "http://127.0.0.1:17898" },
+  "remote.SSH.httpsProxy": { "primary-dev": "http://127.0.0.1:17898" },
   "remote.SSH.noProxy": { "primary-dev": "127.0.0.1,localhost,::1" }
 }
 ```
 
-这些地址是 **Linux 端** 的代理地址。不要把 Linux 的 `17897` 直接当作 Mac 本地 `http.proxy`；Mac 本地代理端口仍由 Clash 决定。若已有字符串形式的全主机代理设置，先保留备份，再按仍需使用它的主机转换为映射，不要丢弃原来的用途。
+这些地址是 **Linux 端** 的代理地址，端口必须与本机 macOS 客户端的远端端口一致（默认 17898）。不要把 Linux 的 `17898` 直接当作 Mac 本地 `http.proxy`；Mac 本地代理端口仍由 Clash 决定。若已有字符串形式的全主机代理设置，先保留备份，再按仍需使用它的主机转换为映射，不要丢弃原来的用途。
 
 已检查的 Anysphere Remote SSH 1.1.16 会将上述配置导出为大小写 HTTP/HTTPS/NO_PROXY 环境变量，并用于启动远端服务。该适配不需要修改 Linux 的登录脚本或现有 Codex wrapper。只配置终端环境变量不能覆盖已经启动的扩展和 Agent。
 
@@ -431,7 +519,7 @@ Cursor 与 Codex 使用配置中同一个开发 alias，例如 `primary-dev`。�
 1. 保存工作，结束需要保留的 Cursor 远端任务。
 2. 在对应远端窗口的命令面板执行 `Remote-SSH: Kill Remote Server and Reload Window`。
 3. 重新连接 **同一个 alias**，打开原来的项目；控制器通常在 5 秒内建立隧道。
-4. 在新的远端终端检查 `printf '%s\n' "$HTTPS_PROXY"`，应为 `http://127.0.0.1:17897`；再运行 `curl --max-time 15 https://api2.cursor.sh` 验证继承的代理。需要时检查远端进程的代理环境。
+4. 在新的远端终端检查 `printf '%s\n' "$HTTPS_PROXY"`，应为 `http://127.0.0.1:17898`（若使用端点列表，wrapper 可能选择其他健康端点）；再运行 `curl --max-time 15 https://api2.cursor.sh` 验证继承的代理。需要时检查远端进程的代理环境。
 5. 在 Mac 运行状态脚本，确认 `ActiveCursorSessions` 至少为 1。Cursor 独立连接时也应保持隧道运行。
 
 普通 Reload Window 或仅关闭窗口可能复用旧服务器，不能保证已有进程获得新环境。以上只验证环境变量和普通 HTTP 请求；原生 Agent 还需要下面的配置和实际聊天验收。

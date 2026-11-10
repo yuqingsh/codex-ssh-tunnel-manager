@@ -55,6 +55,7 @@ controller_label=$(codex_config_get "$config_path" CONTROLLER_LABEL)
 runner_path="$install_root/codex-ssh-tunnel-runner.sh"
 local_proxy_host=$(codex_config_get "$config_path" LOCAL_PROXY_HOST)
 local_proxy_port=$(codex_config_get "$config_path" LOCAL_PROXY_PORT)
+remote_proxy_port=$(codex_config_get "$config_path" REMOTE_PROXY_PORT)
 
 count_lines() {
     printf '%s\n' "$1" | awk 'NF { count += 1 } END { print count + 0 }'
@@ -74,7 +75,7 @@ launchd_state() {
     fi
 }
 
-printf 'Type\tName\tDevAlias\tProxyAlias\tLaunchdState\tLaunchdPID\tActiveCodexSessions\tTunnelSSHProcesses\tProcessIDs\tLocalProxyReachable\tActiveCursorSessions\n'
+printf 'Type\tName\tDevAlias\tProxyAlias\tRemoteProxyPort\tLaunchdState\tLaunchdPID\tActiveCodexSessions\tTunnelSSHProcesses\tProcessIDs\tLocalProxyReachable\tActiveCursorSessions\n'
 controller_status=$(launchd_state "$controller_label")
 controller_state=$(printf '%s' "$controller_status" | awk -F '\t' '{print $1}')
 controller_pid=$(printf '%s' "$controller_status" | awk -F '\t' '{print $2}')
@@ -82,7 +83,7 @@ local_proxy_reachable=false
 if codex_tcp_ready "$local_proxy_host" "$local_proxy_port"; then
     local_proxy_reachable=true
 fi
-printf 'Controller\t%s\t-\t-\t%s\t%s\t-\t-\t-\t%s\t-\n' \
+printf 'Controller\t%s\t-\t-\t-\t%s\t%s\t-\t-\t-\t%s\t-\n' \
     "$controller_label" "$controller_state" "$controller_pid" "$local_proxy_reachable"
 
 for tunnel_name in $(codex_config_tunnel_names "$config_path"); do
@@ -112,7 +113,7 @@ for tunnel_name in $(codex_config_tunnel_names "$config_path"); do
     else
         process_ids=-
     fi
-    printf 'Tunnel\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t-\t%s\n' \
-        "$tunnel_name" "$dev_alias" "$proxy_alias" "$tunnel_state" "$tunnel_pid" \
+    printf 'Tunnel\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t-\t%s\n' \
+        "$tunnel_name" "$dev_alias" "$proxy_alias" "$remote_proxy_port" "$tunnel_state" "$tunnel_pid" \
         "$session_count" "$tunnel_count" "$process_ids" "$cursor_session_count"
 done

@@ -9,6 +9,8 @@ install_script="$repository_root/scripts/macos/install-codex-ssh-tunnel-manager.
 uninstall_script="$repository_root/scripts/macos/uninstall-codex-ssh-tunnel-manager.sh"
 setup_script="$repository_root/scripts/macos/setup-codex-ssh-tunnel-manager.sh"
 controller_script="$repository_root/scripts/macos/codex-ssh-tunnel-controller.sh"
+runner_script="$repository_root/scripts/macos/codex-ssh-tunnel-runner.sh"
+status_script="$repository_root/scripts/macos/get-codex-ssh-tunnel-status.sh"
 failures=0
 temp_root=$(printenv TMPDIR 2>/dev/null || true)
 if [ -z "$temp_root" ]; then
@@ -58,6 +60,80 @@ if [ "$(codex_retry_delay 1 30 600)" != '30' ] || \
     [ "$(codex_retry_delay 1 5 300)" != '5' ]; then
     fail '启动失败退避计算不正确'
 fi
+
+jitter_first=$(codex_jittered_delay 30 1000)
+if [ "$jitter_first" != "$(codex_jittered_delay 30 1000)" ]; then
+    fail 'codex_jittered_delay 不是确定性的'
+fi
+if [ "$jitter_first" -lt 30 ] || [ "$jitter_first" -gt 37 ]; then
+    fail "codex_jittered_delay 抖动超出 base + 0..base/4 范围：$jitter_first"
+fi
+if [ "$(codex_jittered_delay 1 3)" -lt 5 ] || [ "$(codex_jittered_delay 4 9)" -lt 5 ]; then
+    fail 'codex_jittered_delay 没有应用 5 秒下限'
+fi
+jitter_values=
+for jitter_now in 1000 1001 1002 1003 1004 1005; do
+    jitter_values="$jitter_values $(codex_jittered_delay 30 "$jitter_now")"
+done
+jitter_distinct=$(printf '%s\n' $jitter_values | sort -u | wc -l | tr -d ' ')
+if [ "$jitter_distinct" -lt 2 ]; then
+    fail 'codex_jittered_delay 对不同 now 没有产生抖动'
+fi
+
+assert_classify() {
+    classify_expected=$1
+    classify_text=$2
+    classify_actual=$(codex_classify_tunnel_error "$classify_text")
+    if [ "$classify_actual" != "$classify_expected" ]; then
+        fail "失败分类不正确：期望 $classify_expected，实际 $classify_actual（文本：$classify_text）"
+    fi
+}
+assert_classify port-conflict 'Warning: remote port forwarding failed for listen port 17898'
+assert_classify port-conflict 'REMOTE PORT FORWARDING FAILED for listen port 17898'
+for network_text in \
+    'ssh: connect to host example.invalid port 22: timed out' \
+    'ssh: connect to host example.invalid port 22: Connection refused' \
+    'ssh: Could not resolve hostname example.invalid' \
+    'ssh: connect to host example.invalid port 22: Network is unreachable' \
+    'ssh: connect to host example.invalid port 22: No route to host' \
+    'Connection reset by peer' \
+    'write: Broken pipe' \
+    'Permission denied (publickey)'; do
+    assert_classify network "$network_text"
+done
+assert_classify unknown 'ssh: some unexpected failure'
+assert_classify unknown ''
+
+error_log_root="$check_tmp/tunnel-stderr-logs"
+CODEX_SSH_TUNNEL_LOG_ROOT="$error_log_root"
+export CODEX_SSH_TUNNEL_LOG_ROOT
+error_log=$(codex_tunnel_stderr_log primary)
+case "$error_log" in
+    "$error_log_root"/primary-tunnel.stderr.log) ;;
+    *)
+        fail "codex_tunnel_stderr_log 路径不正确：$error_log"
+        ;;
+esac
+mkdir -p "$error_log_root"
+printf '%s\n' \
+    '[runner-marker] 2026-01-01T00:00:00Z alias=primary-proxy' \
+    'stale failure from an earlier attempt' \
+    '[runner-marker] 2026-01-01T00:00:05Z alias=primary-proxy' \
+    'Warning: remote port forwarding failed for listen port 17898' > "$error_log"
+if [ "$(codex_last_tunnel_error primary)" != 'Warning: remote port forwarding failed for listen port 17898' ]; then
+    fail 'codex_last_tunnel_error 没有截取最后一次 marker 之后的文本'
+fi
+if [ -n "$(codex_last_tunnel_error no-such-tunnel)" ]; then
+    fail 'codex_last_tunnel_error 对不存在的日志没有输出空字符串'
+fi
+awk 'BEGIN { for (i = 1; i <= 55; i++) printf "line-%d\n", i }' > "$error_log"
+if [ "$(codex_last_tunnel_error primary | wc -l | tr -d ' ')" != '50' ]; then
+    fail 'codex_last_tunnel_error 在没有 marker 时没有回退到尾部 50 行'
+fi
+if [ "$(codex_last_tunnel_error primary | sed -n '1p')" != 'line-6' ]; then
+    fail 'codex_last_tunnel_error 在没有 marker 时的 tail 起始行不正确'
+fi
+unset CODEX_SSH_TUNNEL_LOG_ROOT
 
 tunnel_names=$(codex_config_tunnel_names "$example_config" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 if [ "$tunnel_names" != 'primary secondary' ]; then
@@ -129,7 +205,32 @@ assert_file_contains "$setup_script" 'gsub(/\]:/, ":", remote)' '初始化向导
 assert_file_contains "$controller_script" 'state_write "$start_name" "$start_now" 0 0 "$start_now"' 'controller 未按隧道名称写入已存在隧道状态'
 assert_file_contains "$controller_script" 'state_write "$start_name" "$start_now" "$start_failures" "$start_retry_at" 0' 'controller 未按隧道名称写入启动失败状态'
 assert_file_contains "$controller_script" 'state_write "$cycle_name" "$cycle_now" "$state_failures" "$state_retry_at" 0' 'controller 未按隧道名称写入会话状态'
-assert_file_contains "$controller_script" 'codex_retry_delay "$cycle_failures" "$tunnel_retry_base_seconds" "$tunnel_retry_max_seconds"' 'controller 未对隧道启动失败应用指数退避'
+assert_file_contains "$controller_script" 'codex_retry_delay "$cycle_failures" "$cycle_retry_base" "$cycle_retry_max"' 'controller 未对隧道启动失败应用指数退避'
+assert_file_contains "$controller_script" 'CODEX_SSH_TUNNEL_CONFLICT_BASE_SECONDS:-15' 'controller 缺少远端端口冲突退避基数（默认 15 秒）'
+assert_file_contains "$controller_script" 'CODEX_SSH_TUNNEL_CONFLICT_MAX_SECONDS:-300' 'controller 缺少远端端口冲突退避上限（默认 300 秒）'
+assert_file_contains "$controller_script" 'codex_last_tunnel_error' 'controller 未读取 tunnel stderr 判断失败原因'
+assert_file_contains "$controller_script" 'codex_classify_tunnel_error' 'controller 未对失败原因分类'
+assert_file_contains "$controller_script" 'codex_jittered_delay "$cycle_retry_delay" "$cycle_now"' 'controller 未在退避时间上叠加抖动'
+assert_file_contains "$controller_script" '远端端口被占用（可能来自另一台客户端或残留连接）；' 'controller 端口冲突日志缺少明确原因'
+assert_file_contains "$controller_script" '连续端口冲突' 'controller 连续端口冲突时缺少检查提示'
+assert_file_contains "$controller_script" '远端防火墙封禁本机公网 IP' 'controller 网络故障日志丢失原有封禁提示'
+assert_file_contains "$runner_script" '[runner-marker]' 'tunnel runner 未写 [runner-marker] 标记'
+assert_file_contains "$runner_script" 'alias=$proxy_alias' 'tunnel runner marker 未包含 proxy alias'
+runner_marker_line=$(grep -n -F '[runner-marker]' "$runner_script" | sed -n '1p' | cut -d: -f1)
+runner_exec_line=$(grep -n -F 'exec /usr/bin/ssh' "$runner_script" | sed -n '1p' | cut -d: -f1)
+if [ -z "$runner_marker_line" ] || [ -z "$runner_exec_line" ] || \
+    [ "$runner_marker_line" -ge "$runner_exec_line" ]; then
+    fail "tunnel runner marker 没有写在 exec ssh 之前：marker=$runner_marker_line exec=$runner_exec_line"
+fi
+assert_file_contains "$status_script" 'ProxyAlias\tRemoteProxyPort' '状态输出表头缺少 ProxyAlias 之后的 RemoteProxyPort 列'
+assert_file_contains "$status_script" 'remote_proxy_port=$(codex_config_get "$config_path" REMOTE_PROXY_PORT)' '状态脚本未从配置读取 REMOTE_PROXY_PORT'
+assert_file_contains "$setup_script" '17898' '初始化向导缺少远端端口默认值 17898'
+assert_file_contains "$setup_script" '每台客户端端口必须不同' '初始化向导缺少多客户端端口唯一性提示'
+assert_file_contains "$setup_script" 'endpoints.conf' '初始化向导缺少 Linux 端点文件名提示'
+assert_file_contains "$setup_script" 'install-codex-wrapper.sh' '初始化向导缺少 Linux wrapper 安装命令提示'
+if ! grep -E 'setup_remote_proxy_port=\$\(prompt_default .* 17898\)' "$setup_script" >/dev/null 2>&1; then
+    fail '初始化向导的远端端口默认值不是 17898'
+fi
 assert_file_contains "$controller_script" 'tunnel_healthy_seconds' 'controller 未定义稳定运行阈值'
 assert_file_contains "$common_path" 'codex_retry_delay()' 'common 缺少退避计算函数'
 if grep -E 'state_write "\$(start_now|cycle_now)"' "$controller_script" >/dev/null 2>&1; then
@@ -163,6 +264,12 @@ fi
 
 if ! sh "$repository_root/tests/test-cursor-sessions.sh"; then
     fail 'Cursor 会话识别或控制器生命周期测试失败'
+fi
+
+if [ ! -f "$repository_root/tests/test-linux-wrapper.sh" ]; then
+    fail '缺少 tests/test-linux-wrapper.sh（Linux 端点契约测试）'
+elif ! sh "$repository_root/tests/test-linux-wrapper.sh"; then
+    fail 'Linux wrapper 端点契约测试失败'
 fi
 
 if [ "$failures" -gt 0 ]; then

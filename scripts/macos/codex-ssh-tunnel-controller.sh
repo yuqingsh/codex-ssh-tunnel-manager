@@ -66,11 +66,20 @@ stop_grace_seconds=$((stop_grace_minutes * 60))
 tunnel_retry_base_seconds=${CODEX_SSH_TUNNEL_RETRY_BASE_SECONDS:-30}
 tunnel_retry_max_seconds=${CODEX_SSH_TUNNEL_RETRY_MAX_SECONDS:-600}
 tunnel_healthy_seconds=${CODEX_SSH_TUNNEL_HEALTHY_SECONDS:-60}
+# 远端端口冲突使用更短、更低上限的独立退避：冲突通常来自另一台客户端或远端
+# 残留连接，端口一旦释放就应尽快恢复；网络故障继续使用较长的退避曲线。
+tunnel_conflict_retry_base_seconds=${CODEX_SSH_TUNNEL_CONFLICT_BASE_SECONDS:-15}
+tunnel_conflict_retry_max_seconds=${CODEX_SSH_TUNNEL_CONFLICT_MAX_SECONDS:-300}
 case "$tunnel_retry_base_seconds" in ''|*[!0-9]*|0) tunnel_retry_base_seconds=30 ;; esac
 case "$tunnel_retry_max_seconds" in ''|*[!0-9]*|0) tunnel_retry_max_seconds=600 ;; esac
 case "$tunnel_healthy_seconds" in ''|*[!0-9]*|0) tunnel_healthy_seconds=60 ;; esac
+case "$tunnel_conflict_retry_base_seconds" in ''|*[!0-9]*|0) tunnel_conflict_retry_base_seconds=15 ;; esac
+case "$tunnel_conflict_retry_max_seconds" in ''|*[!0-9]*|0) tunnel_conflict_retry_max_seconds=300 ;; esac
 if [ "$tunnel_retry_max_seconds" -lt "$tunnel_retry_base_seconds" ]; then
     tunnel_retry_max_seconds=$tunnel_retry_base_seconds
+fi
+if [ "$tunnel_conflict_retry_max_seconds" -lt "$tunnel_conflict_retry_base_seconds" ]; then
+    tunnel_conflict_retry_max_seconds=$tunnel_conflict_retry_base_seconds
 fi
 
 mkdir -p "$state_root" || {
@@ -223,16 +232,37 @@ run_cycle() {
                 continue
             fi
 
-            # 上一次启动尝试过、但现在进程不存在：计为失败，并指数退避，
-            # 避免服务器重启或网络故障期间高频 SSH 连接触发远端防火墙封禁。
+            # 上一次启动尝试过、但现在进程不存在：计为失败并退避。
+            # 先按 runner stderr 分类：端口冲突与网络故障使用不同的退避曲线，
+            # 两者都叠加确定性抖动，避免多台客户端在同一秒重试。
             if [ "$state_started_at" -ne 0 ]; then
                 cycle_failures=$((state_failures + 1))
-                cycle_delay=$(codex_retry_delay "$cycle_failures" "$tunnel_retry_base_seconds" "$tunnel_retry_max_seconds")
+                cycle_error_text=$(codex_last_tunnel_error "$cycle_name" 2>/dev/null || true)
+                cycle_error_kind=$(codex_classify_tunnel_error "$cycle_error_text")
+                case "$cycle_error_kind" in
+                    port-conflict)
+                        cycle_retry_base=$tunnel_conflict_retry_base_seconds
+                        cycle_retry_max=$tunnel_conflict_retry_max_seconds
+                        ;;
+                    *)
+                        cycle_retry_base=$tunnel_retry_base_seconds
+                        cycle_retry_max=$tunnel_retry_max_seconds
+                        ;;
+                esac
+                cycle_retry_delay=$(codex_retry_delay "$cycle_failures" "$cycle_retry_base" "$cycle_retry_max")
+                cycle_delay=$(codex_jittered_delay "$cycle_retry_delay" "$cycle_now")
                 cycle_retry_at=$((cycle_now + cycle_delay))
                 state_write "$cycle_name" "$cycle_now" "$cycle_failures" "$cycle_retry_at" 0
-                log_controller "隧道 $cycle_name 启动失败（连续第 ${cycle_failures} 次）；${cycle_delay} 秒后重试"
-                if [ "$cycle_failures" -ge 3 ]; then
-                    log_controller "提示：连续启动失败可能由服务器未就绪、网络中断或远端防火墙封禁本机公网 IP 引起；请勿手动高频重试"
+                if [ "$cycle_error_kind" = 'port-conflict' ]; then
+                    log_controller "隧道 $cycle_name 远端端口被占用（可能来自另一台客户端或残留连接）；${cycle_delay} 秒后重试"
+                    if [ "$cycle_failures" -ge 2 ]; then
+                        log_controller "提示：连续端口冲突，请检查本机 REMOTE_PROXY_PORT 是否与其他客户端重复，并清理远端旧连接"
+                    fi
+                else
+                    log_controller "隧道 $cycle_name 启动失败（连续第 ${cycle_failures} 次）；${cycle_delay} 秒后重试"
+                    if [ "$cycle_failures" -ge 3 ]; then
+                        log_controller "提示：连续启动失败可能由服务器未就绪、网络中断或远端防火墙封禁本机公网 IP 引起；请勿手动高频重试"
+                    fi
                 fi
                 continue
             fi

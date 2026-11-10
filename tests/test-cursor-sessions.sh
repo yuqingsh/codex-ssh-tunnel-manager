@@ -75,7 +75,9 @@ test_running=0
 test_starts=0
 test_stops=0
 date() { printf '%s\n' "$test_now"; }
-codex_log() { :; }
+test_log_file="$CODEX_SSH_TUNNEL_LOG_ROOT/controller-test.log"
+mkdir -p "$CODEX_SSH_TUNNEL_LOG_ROOT"
+codex_log() { printf '%s\n' "$*" >> "$test_log_file"; }
 codex_find_session_pids() {
     [ "${2:-all}" = all ] || exit 91
     [ "$test_demand" = none ] || printf '102\n'
@@ -112,30 +114,66 @@ run_cycle
 [ "$test_starts" = 1 ]
 
 # Failed starts must back off exponentially instead of hammering SSH every poll.
+# 退避带确定性抖动，因此按状态文件中的 next-attempt 时间推进而不是写死秒数。
 test_demand=cursor
 test_running=0
 test_starts=0
 test_now=5000
+test_state_file="$CODEX_SSH_TUNNEL_STATE_ROOT/primary.state"
 codex_launchd_kickstart() { test_starts=$((test_starts + 1)); }
 run_cycle
 [ "$test_starts" = 1 ] || exit 95
 test_now=5005
 run_cycle
 [ "$test_starts" = 1 ] || exit 96
-test_now=5020
+# 首次失败：网络/未知默认基数 30 秒，叠加 0..7 秒抖动，state 仍为 4 字段。
+[ "$(sed -n '2p' "$test_state_file")" = 1 ] || exit 97
+[ "$(wc -l < "$test_state_file" | tr -d ' ')" = 4 ] || exit 98
+retry_at=$(sed -n '3p' "$test_state_file")
+[ "$retry_at" -ge 5035 ] && [ "$retry_at" -le 5042 ] || exit 99
+test_now=$((retry_at - 1))
 run_cycle
-[ "$test_starts" = 1 ] || exit 97
-test_now=5035
+[ "$test_starts" = 1 ] || exit 100
+test_now=$retry_at
 run_cycle
-[ "$test_starts" = 2 ] || exit 98
-test_now=5040
+[ "$test_starts" = 2 ] || exit 101
+test_now=$((test_now + 1))
 run_cycle
-test_now=5099
+[ "$test_starts" = 2 ] || exit 102
+[ "$(sed -n '2p' "$test_state_file")" = 2 ] || exit 103
+# 第二次失败翻倍：60 秒 + 0..15 秒抖动。
+retry_at=$(sed -n '3p' "$test_state_file")
+[ "$retry_at" -ge $((test_now + 60)) ] || exit 104
+[ "$retry_at" -le $((test_now + 75)) ] || exit 105
+
+# 端口冲突必须使用独立的更短退避（15 秒基数），并明确提示端口被占用。
+mkdir -p "$CODEX_SSH_TUNNEL_LOG_ROOT"
+printf '%s\n' \
+    '[runner-marker] 2026-01-01T00:00:00Z alias=primary-proxy' \
+    'Warning: remote port forwarding failed for listen port 17898' \
+    > "$CODEX_SSH_TUNNEL_LOG_ROOT/primary-tunnel.stderr.log"
+printf '0\n0\n0\n0\n' > "$test_state_file"
+test_starts=0
+test_now=6000
 run_cycle
-[ "$test_starts" = 2 ] || exit 99
-test_now=5100
+[ "$test_starts" = 1 ] || exit 106
+test_now=6001
 run_cycle
-[ "$test_starts" = 3 ] || exit 100
+[ "$test_starts" = 1 ] || exit 107
+[ "$(sed -n '2p' "$test_state_file")" = 1 ] || exit 108
+retry_at=$(sed -n '3p' "$test_state_file")
+[ "$retry_at" -ge $((test_now + 15)) ] || exit 109
+[ "$retry_at" -le $((test_now + 18)) ] || exit 110
+grep -F '远端端口被占用' "$test_log_file" >/dev/null 2>&1 || exit 111
+# 连续第 2 次冲突应提示检查端点/旧连接。
+test_now=$retry_at
+run_cycle
+[ "$test_starts" = 2 ] || exit 112
+test_now=$((test_now + 1))
+run_cycle
+[ "$(sed -n '2p' "$test_state_file")" = 2 ] || exit 113
+grep -F '连续端口冲突' "$test_log_file" >/dev/null 2>&1 || exit 114
+rm -f "$CODEX_SSH_TUNNEL_LOG_ROOT/primary-tunnel.stderr.log"
 TEST
 CODEX_SSH_TUNNEL_STATE_ROOT="$check_tmp/state" \
 CODEX_SSH_TUNNEL_LOG_ROOT="$check_tmp/log" \
